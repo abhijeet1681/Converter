@@ -40,7 +40,7 @@ Settings live in `.env` (already created for this machine). `.env.example` docum
 | What | Details |
 |---|---|
 | **Dark mode default** | Every visitor starts in dark mode. The 🌙/☀️ button (top right) switches to light; the choice is remembered in the browser. |
-| **Indian identity** | Saffron–white–green line at the very top, saffron accent colour on AI features, a real SVG Tiranga with the Ashoka Chakra (24 spokes, navy blue — sprite `#flag-in` in `index.html`) in the hero badge and footer, `₹0` pricing, Indian number formatting (`1,00,000`), Hindi-friendly font stack. |
+| **Indian identity** | Saffron–white–green line at the very top, saffron accent colour on AI features, a real SVG Tiranga with the Ashoka Chakra (24 spokes, navy blue — sprite `#flag-in` in `src/template.html`) in the hero badge, the closing banner and the footer, `₹0` pricing, Indian number formatting (`1,00,000`), Hindi-friendly font stack. |
 | **Animations** | Slow-drifting aurora background, shimmering gradient headline that rotates words ("any file → PDF → photos → … → with AI"), cards that lift and glow on hover, sections that fade in as you scroll, animated progress bars, pulsing "live" dot, a format marquee, bouncing upload icon when you drag a file, **confetti 🎉 when a conversion succeeds**. Everything respects the OS "reduce motion" setting. |
 | **Smart Drop (home page)** | "Not sure which tool? Drop any file here" — detects the file type and shows the 8 tools that can handle it. Pick one and the file is already loaded on the tool page. Nothing is uploaded. |
 | **Command palette** | Press **Ctrl + K** anywhere → instant fuzzy search over all tools. Type a sentence and press **Tab** (or Enter with no match) → the AI picks the right tool. |
@@ -86,6 +86,62 @@ Ready-made **views** (double-click in Navicat for an instant report):
 | `v_missing_tools` | **Searches that found nothing** → the tools you should build next |
 
 If MySQL is stopped, the website keeps working normally; it just stops recording. Turn recording off with `DB_ENABLED=false`.
+
+### 2b. 🌐 LIVE database `live_converter` — Navicat connection details (added 2 Oct 2026, evening)
+
+The live site records into its **own** database, `live_converter`, on the office MySQL server (the one you already
+have in Navicat as *Live_Db*). Same tables and views as `converthub` above; nothing else on that server is touched.
+
+**Connection — add it on any laptop (Navicat → New Connection → MySQL):**
+
+| Field | Value |
+|---|---|
+| Connection name | **`live_converter`** |
+| Host | `192.168.90.223` |
+| Port | `3306` |
+| User | `sfc_app` |
+| Password | *(the Live_Db password — same as your existing Live_Db connection)* |
+| Default database | `live_converter` |
+| SSL / SSH | off (LAN) |
+
+Faster: **Navicat → File → Import Connections… → `deploy/navicat/live_converter.ncx`** (the file has everything
+except the password — Navicat asks for it once, tick *Save password*). Works on every laptop with Navicat.
+The server is only reachable from the office network / VPN — from outside you'll get a connection timeout.
+
+**Create the database (one time, either way works):**
+
+```powershell
+# A) from this project — creates live_converter + 10 tables + 6 views, verifies the login, prints the Navicat details
+npm run db:init -- --host 192.168.90.223 --user sfc_app --password <Live_Db password> --db live_converter
+
+# B) in Navicat — open deploy/live_converter.sql in a query window on Live_Db and press Run (F5)
+```
+
+Both are safe to run twice (`IF NOT EXISTS` / `CREATE OR REPLACE`). `npm run db:sql` regenerates the `.sql`
+file from `src/db.js` whenever the schema changes. If `sfc_app` is not allowed to `CREATE DATABASE`, run
+option B as a user who is (root), then `db:init` just creates the tables.
+
+**Point the website at it** — in the server's `.env` (template: `deploy/.env.live.example`):
+
+```env
+DB_HOST=192.168.90.223
+DB_PORT=3306
+DB_USER=sfc_app
+DB_PASSWORD=<Live_Db password>
+DB_NAME=live_converter
+```
+
+or the one-line form `DATABASE_URL=mysql://sfc_app:<password>@192.168.90.223:3306/live_converter`.
+A cloud MySQL that requires TLS (Aiven / TiDB Cloud / RDS) → add `DB_SSL=true` (or `?ssl=true` on the URL).
+The startup banner then says `➜ MySQL: recording to "live_converter" on 192.168.90.223:3306 ✓`.
+
+⚠️ **Vercel cannot reach `192.168.90.223`** — it is a private office IP. The live DB works when ConvertHub runs on a
+machine inside the office network (or a VPS with VPN/port-forward to it). On Vercel use a cloud MySQL via
+`DATABASE_URL`, or leave the DB off (the site still works; only analytics/admin are missing).
+
+Verified 2 Oct 2026: `db:init` created `live_converter` (10 tables, 6 views) in 2.1 s, `deploy/live_converter.sql`
+ran twice without errors, test copy dropped again. The live server itself was not reachable from this laptop at the
+time (TCP 3306 timed out — not on the office network), so run the command above once you are.
 
 ### 3. Admin dashboard — http://localhost:7683/admin
 
@@ -140,10 +196,16 @@ It is **ON in your `.env`** (`ARCHIVE_FILES=true`).
    (never to a third party). Files above `ARCHIVE_MAX_FILE_MB` (50 MB) are skipped.
 2. The server saves them on local disk first: `D:\converthub-archive\YYYY\MM\DD\<conversion-id>\input-….jpg` and `output-….png`.
    This is instant and never fails because Drive is slow or offline.
-3. A background queue uploads each file to **your Google Drive** folder
-   (the folder whose id is in `GDRIVE_FOLDER_ID`) as
-   `ConvertHub/2026-10-02/<conversion-id>/input-….jpg`. The Drive link is written back to MySQL (`files.drive_url`).
-   If Drive is down or not yet logged in, files wait on disk and are uploaded automatically when the server starts next time.
+3. Each file is uploaded to **your Google Drive** folder — <https://drive.google.com/drive/folders/1M__NV3qx9nIHBpcQKLZwZSZKyPA1TT71>
+   (`GDRIVE_FOLDER_ID`) — as `ConvertHub/2026-10-02/<conversion-id>/input-….jpg`. The Drive link is written back to MySQL (`files.drive_url`).
+   Two upload methods, picked automatically:
+   * **Drive API (now the default — `GDRIVE_CLIENT_ID` / `GDRIVE_CLIENT_SECRET` / `GDRIVE_REFRESH_TOKEN` in `.env`)** — the server
+     talks to Google directly as *you*. No rclone binary, no disk needed, so it is **the only method that works on Vercel**
+     (there files are staged in `/tmp` and sent to Drive inside the request; a Vercel-only deployment without a database still
+     groups them per conversion using a random batch id).
+   * **rclone** (`GDRIVE_REMOTE=gdrive`) — used only while the three API values are empty. Laptop/VPS only.
+   On a long-running server the upload is a background queue (one at a time, retried 5× with growing delays; files wait on disk
+   and are uploaded automatically after a restart). Throttling by Google (403/429) is retried with back-off up to ~30 s.
 4. `ARCHIVE_KEEP_DAYS=0` → **nothing is ever deleted** (your choice). If you ever set a number, a daily sweeper deletes local + Drive copies older than that.
 
 
@@ -174,13 +236,37 @@ already waiting on disk will be uploaded within a minute.
 
 ✅ **Done on 2 Oct 2026 15:26** — login completed, `Drive: connected ✓`, first files visible in the Drive folder, links in `files.drive_url`.
 
-⚠️ **Before deploy — make your own Google client ID (5 min, free).** rclone warns that its *shared* Google Drive app
-"is being retired and will stop working during 2026". Follow <https://rclone.org/drive/#making-your-own-client-id>
-(Google Cloud Console → OAuth client → paste `client_id` / `client_secret` into `rclone config` → `rclone config reconnect gdrive:`).
-Until then files are always safe on local disk and auto-upload once Drive works again.
+✅ **2 Oct 2026 evening — Drive API method wired up and verified.** The refresh token from that rclone login was put into `.env`
+(`GDRIVE_REFRESH_TOKEN`, together with the id/secret of rclone's built-in Google client it belongs to). Banner now reads
+`➜ Drive: connected ✓ → Drive API as abhijeet.1083846@ratnamcollege.edu.in → https://drive.google.com/drive/folders/1M__…`.
+Tested: real `/api/archive` upload → `ConvertHub/2026-10-02/<id>/input-drive-test.jpg` appeared in the folder, `files.drive_url`
+filled in; simulated Vercel mode (`VERCEL=1`, no DB, no rclone) → file reached Drive inside the request in 23 s. Test files deleted.
 
-🔐 **Never paste `rclone config` output anywhere** (chat, email, screenshots) — it contains your Drive refresh token, which
-is a full-access key to your Drive. If it leaked, run `rclone config reconnect gdrive:` to issue a new one (the old one dies).
+**For the LIVE site (Vercel or VPS): set these environment variables and the archive works there too** — copy the values from
+this laptop's `.env` (Vercel → Project → Settings → Environment Variables):
+
+```
+ARCHIVE_FILES=true
+GDRIVE_ENABLED=true
+GDRIVE_FOLDER_ID=1M__NV3qx9nIHBpcQKLZwZSZKyPA1TT71
+GDRIVE_FOLDER=ConvertHub
+GDRIVE_CLIENT_ID=…        GDRIVE_CLIENT_SECRET=…        GDRIVE_REFRESH_TOKEN=…
+```
+
+Vercel limits request bodies to 4.5 MB, so there `ARCHIVE_MAX_FILE_MB` is capped at 4 automatically — bigger files are archived
+only on a real server. Everything a visitor converts on the live site then appears in the Drive folder within seconds.
+
+⚠️ **Do soon — make your own Google client ID (5 min, free).** The token above belongs to rclone's *shared* Google app:
+(a) rclone says it "is being retired and will stop working during 2026", and (b) its request quota is shared by every rclone
+user on earth — during the test Google answered `Quota exceeded … Requests per minute` once (retried automatically, but it
+will get worse). Steps (also at the top of `scripts/gdrive-auth.js`): Google Cloud Console → new project → enable **Google
+Drive API** → OAuth consent screen (External, add yourself as test user or Publish) → Credentials → OAuth client ID →
+**Desktop app** → put the Client ID/secret into `.env` → `npm run gdrive:auth` → browser opens → Allow. The script writes the
+new `GDRIVE_*` values into `.env` and prints them for Vercel. Old rclone remote keeps working as fallback.
+
+🔐 **A refresh token is a full-access key to your Drive.** The one in `.env` was pasted into a chat once — when you create your
+own client (above) the old token becomes irrelevant; you can also kill it any time at <https://myaccount.google.com/permissions>
+(remove "rclone"). `.env` is git-ignored; never put these values in `README`, `.env.example` or a commit.
 
 **Drive folder sharing — what to set**
 
@@ -203,9 +289,11 @@ If the folder is currently public, change it in Drive → right-click → Share 
 | `ARCHIVE_KEEP_DAYS` | `0` | **0 = keep forever (your setting).** Any other number = delete after N days |
 | `ARCHIVE_MAX_FILE_MB` | `50` | Bigger files are not archived (saves bandwidth; videos are big) |
 | `GDRIVE_ENABLED` | `true` | Upload to Drive (false = local disk only) |
-| `GDRIVE_REMOTE` | `gdrive` | rclone remote name |
+| `GDRIVE_FOLDER_ID` | `1M__NV3qx9nIHBpcQKLZwZSZKyPA1TT71` | Your Drive folder id (from the link) — everything goes in here |
 | `GDRIVE_FOLDER` | `ConvertHub` | Sub-folder created inside your Drive folder |
-| `GDRIVE_FOLDER_ID` | *(your folder id)* | Your Drive folder id (from the link) — used for dashboard links |
+| `GDRIVE_CLIENT_ID` / `GDRIVE_CLIENT_SECRET` / `GDRIVE_REFRESH_TOKEN` | *(set)* | Drive API login — when all three are set, uploads use the API (works on Vercel). `npm run gdrive:auth` fills them in |
+| `GDRIVE_REMOTE` | `gdrive` | rclone remote name — fallback used only while the three values above are empty |
+| `RCLONE_PATH` | *(auto)* | Full path to rclone.exe if it is not found automatically |
 
 Verified: real conversion → `D:\converthub-archive\2026\10\02\4\input-test.jpg` + `output-test.png` on disk →
 rows 7 & 8 in `files` → admin ⬇ link returns the file (HTTP 200, 134 bytes) → privacy text shown. Drive upload is
@@ -250,7 +338,8 @@ ConvertHub has **two halves**:
 | Half | Needs | Works on Vercel? |
 |---|---|---|
 | **115+ browser tools** (image, PDF, Excel, audio, video, ZIP, PDF→Word…) | Just static files | ✅ Yes — perfectly |
-| **Server features**: MySQL analytics + admin dashboard, AI (Ollama/Whisper), Google Drive archive, LibreOffice Office→PDF | A machine that runs 24×7 with those services on it | ❌ No — Vercel is "serverless": no MySQL, no Docker, no disk, functions die after each request |
+| **Google Drive archive** (copy of every converted file in your Drive) | Drive API login (`GDRIVE_*` vars) | ✅ Yes — since 2 Oct evening, via the Drive API (no rclone/disk needed), files ≤ 4 MB |
+| **Server features**: MySQL analytics + admin dashboard, AI (Ollama/Whisper), LibreOffice Office→PDF | A machine that runs 24×7 with those services on it (or a cloud MySQL via `DATABASE_URL`) | ❌ No — Vercel is "serverless": no MySQL, no Docker, no disk, functions die after each request |
 
 **✅ LIVE on Vercel (since 2 Oct 2026, 17:25 IST)**
 
@@ -273,11 +362,17 @@ ConvertHub has **two halves**:
 | #5 | Ready but still 500 | you had pasted **all 32 `.env` values into Vercel's Environment Variables**, so `ARCHIVE_FILES=true` + `ARCHIVE_DIR=D:\converthub-archive` made the function try to `mkdir D:\…` on Linux → crash. `vendor/*.wasm` was 404 because the legacy `builds` config never copied the generated libraries into the static output. | `server.js` now **forces** archive/Office off on serverless and treats `127.0.0.1` DB/AI URLs as "off"; `vercel.json` rewritten (`buildCommand: npm run vendor`, `outputDirectory: public`) |
 | #6 (`a7af4f9`) | ✅ **Ready & working** | | |
 
-The 32 environment variables you added in Vercel are now **harmless** (the code ignores laptop-only values), but they are
-noise — you can delete them all (Project → Settings → Environment Variables). Only set variables there if you later point
-`DB_HOST` at a cloud MySQL (Aiven / PlanetScale / Railway) or `OLLAMA_URL` at a GPU server with a public URL; then analytics,
-the admin dashboard and the AI tools come alive on Vercel too. `ARCHIVE_FILES` and LibreOffice can never work on Vercel
-(no disk, no binaries) — they need the VPS below.
+The 32 environment variables you added in Vercel are **harmless** (the code ignores laptop-only values), but they are
+noise — delete them all (Project → Settings → Environment Variables) and set only these:
+
+| Set in Vercel | Why |
+|---|---|
+| `ARCHIVE_FILES=true`, `GDRIVE_ENABLED=true`, `GDRIVE_FOLDER_ID=1M__NV3qx9nIHBpcQKLZwZSZKyPA1TT71`, `GDRIVE_FOLDER=ConvertHub`, `GDRIVE_CLIENT_ID`, `GDRIVE_CLIENT_SECRET`, `GDRIVE_REFRESH_TOKEN` (values from this laptop's `.env`) | **Every file converted on the live site is sent to your Drive folder** (added 2 Oct evening, verified in Vercel mode — see 4b). Files up to 4 MB (Vercel body limit). |
+| `DATABASE_URL=mysql://user:pass@host:3306/live_converter?ssl=true` | only if you put `live_converter` on a cloud MySQL — the office server 192.168.90.223 is not reachable from Vercel |
+| `OLLAMA_URL` / `WHISPER_URL` | only if you have an AI server with a public URL |
+
+After adding variables: Deployments → ⋯ → Redeploy. LibreOffice and the local-disk archive can never work on Vercel (no binaries,
+no disk) — they need the VPS below; the Drive upload does not need either.
 
 **Do not commit `.env`** — it is laptop-specific and would break the Vercel function. `.env.example` documents everything.
 

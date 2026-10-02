@@ -17,6 +17,7 @@ import { createRequire } from 'node:module';
 // The tool catalog is shared between browser and server (single source of truth).
 // Static import (not a dynamic path) so serverless bundlers (Vercel/nft) trace and include it.
 import { TOOLS, CATEGORIES, SITE_NAME } from './public/js/tools.js';
+import { loadEnvFile } from './src/env.js';
 
 const execFileP = promisify(execFile);
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
@@ -28,16 +29,19 @@ loadEnvFile(path.join(__dirname, '.env'));
 // Serverless (Vercel / Lambda / Netlify): there is no persistent disk, no LibreOffice, no rclone, and
 // "127.0.0.1" means the function itself — never the owner's laptop. So, regardless of what environment
 // variables were pasted into the dashboard:
-//   • file archive + Office conversion are always OFF (physically impossible there)
+//   • Office conversion is always OFF (physically impossible there)
+//   • file archive is ON only with the Google Drive API login (GDRIVE_CLIENT_ID/SECRET/REFRESH_TOKEN) — files are
+//     staged in /tmp and uploaded to Drive inside the request; with rclone-only settings it is OFF
 //   • MySQL / Ollama / Whisper pointing at localhost are treated as OFF (avoids 5 s connect timeouts per cold start)
-//   • a real cloud MySQL (DB_HOST=db.example.com) or remote Ollama URL still works
+//   • a real cloud MySQL (DB_HOST=db.example.com / DATABASE_URL) or remote Ollama URL still works
 // The 115+ in-browser tools work exactly the same; the UI shows friendly "not available" notices for the rest.
 const SERVERLESS = Boolean(process.env.VERCEL || process.env.AWS_LAMBDA_FUNCTION_NAME || process.env.NETLIFY);
 if (SERVERLESS) {
   const isLocal = v => !v || /^(https?:\/\/)?(127\.0\.0\.1|localhost|::1|0\.0\.0\.0)(:\d+)?\/?$/i.test(String(v).trim());
-  process.env.ARCHIVE_FILES = 'false';
+  const driveApi = process.env.GDRIVE_CLIENT_ID && process.env.GDRIVE_CLIENT_SECRET && process.env.GDRIVE_REFRESH_TOKEN && process.env.GDRIVE_ENABLED !== 'false';
+  if (driveApi) process.env.GDRIVE_ENABLED = 'true'; else process.env.ARCHIVE_FILES = 'false';
   process.env.ENABLE_OFFICE_CONVERSION = 'false';
-  if (isLocal(process.env.DB_HOST)) process.env.DB_ENABLED = 'false';
+  if (isLocal(process.env.DB_HOST) && !process.env.DATABASE_URL) process.env.DB_ENABLED = 'false';
   if (isLocal(process.env.OLLAMA_URL)) process.env.OLLAMA_URL = '';
   if (isLocal(process.env.WHISPER_URL)) process.env.WHISPER_URL = '';
   process.env.TRUST_PROXY = 'true'; // always behind the platform's proxy
@@ -178,7 +182,7 @@ app.get('/api/health', async (req, res) => {
   res.json({
     ok: true, name: SITE_NAME, version: pkg.version, office: Boolean(soffice), maxUploadMb: config.maxUploadMb,
     db: db.dbStatus().ready, ai: { llm: a.llm, model: a.model, whisper: a.whisper },
-    archive: archiveOn ? { enabled: true, keepDays: archive.archiveConfig().keepDays, maxFileMb: archive.archiveConfig().maxFileMb, drive: archive.archiveConfig().drive.enabled } : { enabled: false },
+    archive: archiveOn ? { enabled: true, keepDays: archive.archiveConfig().keepDays, maxFileMb: archive.archiveConfig().maxFileMb, drive: archive.archiveConfig().drive.enabled, backend: archive.archiveConfig().drive.backend } : { enabled: false },
   });
 });
 
@@ -315,14 +319,18 @@ app.post('/api/archive', (req, res, next) => {
 }, async (req, res) => {
   const file = req.file;
   if (!file) return res.status(400).json({ error: 'No file.' });
-  const { conversion_id, role } = req.body || {};
+  const { conversion_id, role, batch } = req.body || {};
   try {
-    if (!conversion_id) throw new Error('conversion_id missing');
+    // Folder key: the MySQL conversion id when analytics are on, otherwise the browser's random batch id
+    // (so the archive still works on a deployment without a database — e.g. Vercel + Drive only).
+    const hasConv = /^\d{1,12}$/.test(String(conversion_id || ''));
+    const key = hasConv ? String(Number(conversion_id)) : /^[A-Za-z0-9-]{8,64}$/.test(String(batch || '')) ? batch : null;
+    if (!key) throw new Error('conversion_id or batch missing');
     const name = file.originalname || 'file';
-    const rel = await archive.saveLocal(file.path, { conversionId: Number(conversion_id), role, name });
-    const id = await db.attachArchive(req.sid, { conversion_id, role, name, ext: path.extname(name).slice(1), mime: file.mimetype, size: file.size, storage_path: rel });
-    if (id) archive.enqueueDrive(id, rel);
-    res.json({ ok: true, file_id: id });
+    const rel = await archive.saveLocal(file.path, { conversionId: key, role, name });
+    const id = hasConv ? await db.attachArchive(req.sid, { conversion_id, role, name, ext: path.extname(name).slice(1), mime: file.mimetype, size: file.size, storage_path: rel }) : null;
+    const drive = await archive.enqueueDrive(id, rel); // server: queued → null; serverless: uploaded now → { id, url }
+    res.json({ ok: true, file_id: id, drive_url: drive?.url || null });
   } catch (e) {
     await safeUnlink(file.path);
     res.status(400).json({ error: e.message });
@@ -419,13 +427,14 @@ const server = SERVERLESS ? null : app.listen(config.port, config.host, () => {
   console.log(`  ➜ Local:   http://localhost:${config.port}`);
   console.log(`  ➜ Tools:   ${TOOLS.length}`);
   console.log(`  ➜ Office:  ${soffice ? 'enabled (' + soffice + ')' : 'not available — Word/PPT→PDF will use fallbacks (see README)'}`);
-  console.log(`  ➜ MySQL:   ${dbReady ? 'recording to "' + db.dbStatus().database + '" ✓' : 'off — nothing is recorded'}`);
+  console.log(`  ➜ MySQL:   ${dbReady ? 'recording to "' + db.dbStatus().database + '" on ' + db.dbStatus().host + ' ✓' : 'off — nothing is recorded' + (db.dbStatus().error ? ' (' + db.dbStatus().error + ')' : '')}`);
   console.log(`  ➜ AI:      ${aiStatus.llm ? 'Ollama ✓ (' + aiStatus.model + ')' : 'Ollama ✗'} · ${aiStatus.whisper ? 'Whisper ✓' : 'Whisper ✗'}`);
   console.log(`  ➜ Admin:   ${config.adminKey ? 'http://localhost:' + config.port + '/admin' : 'set ADMIN_KEY in .env to enable /admin'}`);
   if (archiveOn) {
     const a = archive.archiveStatus();
     console.log(`  ➜ Archive: ON → ${a.dir} (keep ${a.keepDays || '∞'} days, max ${a.maxFileMb} MB/file)`);
-    console.log(`  ➜ Drive:   ${!a.drive.enabled ? 'off (GDRIVE_ENABLED=false)' : a.drive.ok ? 'connected ✓ → ' + a.drive.remote + ':' + a.drive.folder : '✗ ' + a.drive.error}`);
+    const where = a.drive.backend === 'api' ? `Drive API as ${a.drive.account || 'your Google account'} → ${a.drive.folderUrl || a.drive.folder}` : `rclone ${a.drive.remote}:${a.drive.folder}`;
+    console.log(`  ➜ Drive:   ${!a.drive.enabled ? 'off (GDRIVE_ENABLED=false)' : a.drive.ok ? 'connected ✓ → ' + where : '✗ ' + a.drive.error}`);
   } else console.log('  ➜ Archive: off (ARCHIVE_FILES=false) — files are never stored');
   console.log(`${line}\n`);
   if (aiStatus.llm) ai.warmUp(); // background: load the model now so the first AI request is fast
@@ -442,19 +451,6 @@ if (server) {
 }
 
 // ---------- helpers ----------
-function loadEnvFile(file) {
-  if (!fs.existsSync(file)) return;
-  for (const raw of fs.readFileSync(file, 'utf8').split(/\r?\n/)) {
-    const line = raw.trim();
-    if (!line || line.startsWith('#')) continue;
-    const m = line.match(/^([A-Za-z_][A-Za-z0-9_]*)\s*=\s*(.*)$/);
-    if (!m) continue;
-    let v = m[2].trim();
-    if ((v.startsWith('"') && v.endsWith('"')) || (v.startsWith("'") && v.endsWith("'"))) v = v.slice(1, -1);
-    if (process.env[m[1]] === undefined) process.env[m[1]] = v;
-  }
-}
-
 async function findSoffice() {
   const win = process.platform === 'win32';
   const candidates = [

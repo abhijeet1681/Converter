@@ -10,7 +10,10 @@
     "postinstall": "node scripts/copy-vendor.js",
     "vendor": "node scripts/copy-vendor.js",
     "start": "node server.js",
-    "dev": "node --watch server.js"
+    "dev": "node --watch server.js",
+    "db:init": "node scripts/init-db.js",
+    "db:sql": "node scripts/export-schema.js",
+    "gdrive:auth": "node scripts/gdrive-auth.js"
   },
   "engines": {
     "node": ">=18.17"

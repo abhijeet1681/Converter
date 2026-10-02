@@ -802,11 +802,13 @@ function toolView(tool) {
   /** ARCHIVE (owner opt-in): send a copy of inputs + outputs to the site's own server. Sequential, background, never blocks the UI. */
   async function archiveCopies(items) {
     const s = await health();
-    if (!s.archive?.enabled || !state.conversionId) return;
+    if (!s.archive?.enabled) return;
     const max = (s.archive.maxFileMb || 50) * 1024 * 1024;
+    // No database (e.g. Vercel + Drive only) → no conversion id; a random batch id groups the files in one Drive folder instead
+    const batch = state.conversionId ? '' : (crypto.randomUUID?.() || `${Date.now().toString(36)}-${Math.random().toString(36).slice(2, 10)}`);
     const send = async (blob, name, role) => {
       if (blob.size > max) return;
-      const fd = new FormData(); fd.append('conversion_id', String(state.conversionId)); fd.append('role', role); fd.append('file', blob, name);
+      const fd = new FormData(); fd.append('conversion_id', state.conversionId ? String(state.conversionId) : ''); fd.append('batch', batch); fd.append('role', role); fd.append('file', blob, name);
       await fetch('/api/archive', { method: 'POST', headers: { 'x-ch-session': sid }, body: fd }).catch(() => {});
     };
     for (const it of items) if (it.status === 'done') await send(it.file, it.file.name, 'input');
@@ -896,7 +898,9 @@ function adminView() {
           h('h3', { style: 'margin-top:16px' }, 'Latest feedback'), table([['When', x => new Date(x.created_at).toLocaleString('en-IN')], ['Tool', x => x.tool_id || '—'], ['★', x => x.rating ?? '—'], ['Comment', x => x.comment || '—', 'trunc']], d.feedback)),
         d.archive?.enabled ? h('div', { class: 'card wide' }, h('h3', null, '📁 File archive', h('span', { class: `pill ${d.archive.drive.enabled ? (d.archive.drive.ok ? 'success' : 'error') : 'started'}` }, d.archive.drive.enabled ? (d.archive.drive.ok ? 'Google Drive connected' : 'Google Drive: not connected') : 'local disk only')),
           h('div', { class: 'kpis', style: 'margin:0 0 10px' }, kpi(fmtNum(d.archive.totals.archived), 'files archived'), kpi(fmtNum(d.archive.totals.on_drive), 'uploaded to Drive'), kpi(mb(d.archive.disk.bytes), `on local disk (${fmtNum(d.archive.disk.files)} files)`), kpi(d.archive.keepDays ? `${d.archive.keepDays} days` : '∞', 'kept for'), kpi(fmtNum(d.archive.drive.queue || 0), 'waiting to upload')),
-          h('p', { class: 'muted', style: 'margin:0;font-size:13px' }, `Local folder: ${d.archive.dir}`, d.archive.drive.enabled ? h('span', null, ' · Drive: ', d.archive.drive.folderUrl ? h('a', { href: d.archive.drive.folderUrl, target: '_blank', rel: 'noopener' }, `${d.archive.drive.remote}:${d.archive.drive.folder} ↗`) : `${d.archive.drive.remote}:${d.archive.drive.folder}`, d.archive.drive.error ? h('span', { style: 'color:var(--err)' }, ` — ${d.archive.drive.error}`) : null) : null)) : null,
+          h('p', { class: 'muted', style: 'margin:0;font-size:13px' }, d.archive.serverless ? 'Serverless: files go straight to Drive (no local copy)' : `Local folder: ${d.archive.dir}`, d.archive.drive.enabled ? h('span', null, ' · Drive: ',
+            d.archive.drive.folderUrl ? h('a', { href: d.archive.drive.folderUrl, target: '_blank', rel: 'noopener' }, `${d.archive.drive.backend === 'api' ? (d.archive.drive.account || 'Drive API') : d.archive.drive.remote + ':'}${d.archive.drive.backend === 'api' ? ' → ' : ''}${d.archive.drive.folder} ↗`) : `${d.archive.drive.remote}:${d.archive.drive.folder}`,
+            d.archive.drive.error ? h('span', { style: 'color:var(--err)' }, ` — ${d.archive.drive.error}`) : null) : null)) : null,
         h('div', { class: 'card wide' }, h('h3', null, 'Recent conversions'), table([
           ['When', x => new Date(x.started_at).toLocaleString('en-IN')], ['Tool', x => x.tool_title], ['Status', x => h('span', { class: `pill ${x.status}` }, x.status)], ['Where', x => x.location],
           ['Files', x => x.files?.length ? h('span', { style: 'display:flex;gap:4px;flex-wrap:wrap' }, ...x.files.filter(f => f.local || f.drive_url).map(f => h('a', { class: 'pill success', href: `/api/admin/file/${f.id}?key=${encodeURIComponent(key)}`, title: `${f.name} · ${Math.round(f.size_bytes / 1024)} KB${f.drive_url ? ' · on Drive' : ''}` }, `⬇ ${f.role === 'input' ? 'in' : 'out'}`))) : x.input_count], ['Size', x => `${x.input_kb} KB`], ['From → To', x => `${x.from_ext || '?'} → ${x.to_ext || '?'}`], ['Secs', x => x.seconds ?? '—'], ['Device', x => `${x.device} · ${x.browser}`], ['Error', x => x.error_message || '', 'trunc']], d.recent)),

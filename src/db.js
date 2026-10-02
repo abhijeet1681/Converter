@@ -7,22 +7,36 @@
 import mysql from 'mysql2/promise';
 import crypto from 'node:crypto';
 
+// DATABASE_URL (mysql://user:pass@host:3306/live_converter?ssl=true) wins over the separate DB_* variables —
+// cloud MySQL providers (Aiven, TiDB Cloud, PlanetScale…) hand you exactly that one line.
+function fromUrl(u) {
+  try {
+    const x = new URL(u);
+    if (!/^mysql2?:$/.test(x.protocol)) return null;
+    return { host: x.hostname, port: Number(x.port) || 3306, user: decodeURIComponent(x.username), password: decodeURIComponent(x.password),
+      database: x.pathname.replace(/^\//, ''), ssl: ['true', '1', 'required', 'REQUIRED'].includes(x.searchParams.get('ssl') || x.searchParams.get('sslmode') || '') };
+  } catch { return null; }
+}
+const url = fromUrl(process.env.DATABASE_URL || '');
 const cfg = {
   enabled: process.env.DB_ENABLED !== 'false',
-  host: process.env.DB_HOST || '127.0.0.1',
-  port: Number(process.env.DB_PORT) || 3306,
-  user: process.env.DB_USER || 'root',
-  password: process.env.DB_PASSWORD ?? '',
-  database: process.env.DB_NAME || 'converthub',
+  host: url?.host || process.env.DB_HOST || '127.0.0.1',
+  port: url?.port || Number(process.env.DB_PORT) || 3306,
+  user: url?.user || process.env.DB_USER || 'root',
+  password: url?.password ?? process.env.DB_PASSWORD ?? '',
+  database: url?.database || process.env.DB_NAME || 'converthub',
+  ssl: url?.ssl || process.env.DB_SSL === 'true', // TLS — required by every hosted MySQL; off for LAN / localhost
   ipSalt: process.env.IP_HASH_SALT || 'converthub-salt',
 };
+export const dbConfig = () => ({ ...cfg, password: cfg.password ? '***' : '' });
 
 let pool = null;
 let ready = false;
 let lastError = null;
 
-// Table definitions — order matters (foreign keys)
-const SCHEMA = [
+// Table definitions — order matters (foreign keys). Exported so scripts/export-schema.js can write the same
+// schema to deploy/live_converter.sql for people who prefer to create the database in Navicat.
+export const SCHEMA = [
   `CREATE TABLE IF NOT EXISTS sessions (
     id CHAR(36) NOT NULL PRIMARY KEY,
     first_seen DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP,
@@ -104,6 +118,10 @@ const SCHEMA = [
     pages INT UNSIGNED NULL,
     duration_sec DECIMAL(10,2) NULL,
     created_at DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP,
+    storage_path VARCHAR(512) NULL COMMENT 'relative path in the local archive folder (ARCHIVE_FILES=true)',
+    drive_file_id VARCHAR(128) NULL COMMENT 'Google Drive file id once uploaded',
+    drive_url VARCHAR(255) NULL,
+    archived_at DATETIME NULL,
     KEY idx_files_session (session_id),
     KEY idx_files_conv (conversion_id),
     KEY idx_files_ext (ext),
@@ -247,17 +265,20 @@ const SCHEMA = [
 export async function initDb() {
   if (!cfg.enabled) { console.log('  ➜ Database: disabled (DB_ENABLED=false)'); return false; }
   try {
-    // Step 1: connect without a database and create ours (only touches "converthub")
-    const admin = await mysql.createConnection({ host: cfg.host, port: cfg.port, user: cfg.user, password: cfg.password, connectTimeout: 5000 });
-    await admin.query(`CREATE DATABASE IF NOT EXISTS \`${cfg.database}\` CHARACTER SET utf8mb4 COLLATE utf8mb4_0900_ai_ci`);
-    await admin.end();
+    // Step 1: connect without a database and create ours (only touches DB_NAME). If the login is not allowed
+    // to CREATE DATABASE (typical for a shared live server where the DBA made the database already), carry on.
+    const ssl = cfg.ssl ? { rejectUnauthorized: true, minVersion: 'TLSv1.2' } : undefined;
+    const admin = await mysql.createConnection({ host: cfg.host, port: cfg.port, user: cfg.user, password: cfg.password, connectTimeout: 5000, ssl });
+    try { await admin.query(`CREATE DATABASE IF NOT EXISTS \`${cfg.database}\` CHARACTER SET utf8mb4 COLLATE utf8mb4_0900_ai_ci`); }
+    catch (e) { if (e.code !== 'ER_DBACCESS_DENIED_ERROR' && e.code !== 'ER_ACCESS_DENIED_ERROR') throw e; }
+    finally { await admin.end(); }
     // Step 2: pool against the database + create tables/views
     // The MySQL container runs in UTC while this server runs in IST. Force every connection to the server's
     // own UTC offset so CURRENT_TIMESTAMP, NOW(), CURDATE() and the dates Node reads back all agree.
     const off = -new Date().getTimezoneOffset(); // minutes east of UTC (IST = 330)
     const tz = `${off < 0 ? '-' : '+'}${String(Math.floor(Math.abs(off) / 60)).padStart(2, '0')}:${String(Math.abs(off) % 60).padStart(2, '0')}`;
     pool = mysql.createPool({
-      host: cfg.host, port: cfg.port, user: cfg.user, password: cfg.password, database: cfg.database,
+      host: cfg.host, port: cfg.port, user: cfg.user, password: cfg.password, database: cfg.database, ssl,
       waitForConnections: true, connectionLimit: 10, queueLimit: 0, charset: 'utf8mb4', timezone: tz,
       enableKeepAlive: true, keepAliveInitialDelay: 10000, namedPlaceholders: true,
     });
@@ -266,7 +287,7 @@ export async function initDb() {
     await migrate();
     ready = true;
     lastError = null;
-    console.log(`  ➜ Database: ${cfg.user}@${cfg.host}:${cfg.port}/${cfg.database} ✓ (${SCHEMA.length} objects ready)`);
+    console.log(`  ➜ Database: ${cfg.user}@${cfg.host}:${cfg.port}/${cfg.database}${cfg.ssl ? ' (TLS)' : ''} ✓ (${SCHEMA.length} objects ready)`);
     return true;
   } catch (e) {
     ready = false;
@@ -277,7 +298,7 @@ export async function initDb() {
 }
 
 // Columns added after v2.0 — MySQL has no "ADD COLUMN IF NOT EXISTS", so check information_schema first
-const MIGRATIONS = [
+export const MIGRATIONS = [
   ['files', 'storage_path', 'VARCHAR(512) NULL COMMENT "relative path in the local archive folder (ARCHIVE_FILES=true)"'],
   ['files', 'drive_file_id', 'VARCHAR(128) NULL COMMENT "Google Drive file id once uploaded"'],
   ['files', 'drive_url', 'VARCHAR(255) NULL'],
@@ -289,7 +310,9 @@ async function migrate() {
   for (const [table, col, def] of MIGRATIONS) if (!have.has(`${table}.${col}`)) await pool.query(`ALTER TABLE \`${table}\` ADD COLUMN \`${col}\` ${def}`);
 }
 
-export const dbStatus = () => ({ enabled: cfg.enabled, ready, database: cfg.database, host: `${cfg.host}:${cfg.port}`, error: lastError });
+export const dbStatus = () => ({ enabled: cfg.enabled, ready, database: cfg.database, host: `${cfg.host}:${cfg.port}`, ssl: cfg.ssl, error: lastError });
+/** Count of tables and views in our database (for scripts/init-db.js). */
+export const listObjects = () => safe('SELECT SUM(TABLE_TYPE = "BASE TABLE") AS tables, SUM(TABLE_TYPE = "VIEW") AS views FROM information_schema.TABLES WHERE TABLE_SCHEMA = ?', [cfg.database]).then(r => (r?.[0] ? { tables: Number(r[0].tables), views: Number(r[0].views) } : null));
 
 /** Run a query but never crash the request if the DB is down. */
 async function safe(sql, params) {

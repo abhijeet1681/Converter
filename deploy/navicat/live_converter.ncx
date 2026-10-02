@@ -1,0 +1,14 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!--
+  Navicat connection "live_converter" — ConvertHub live database.
+  Import on any laptop: Navicat → File → Import Connections… → choose this file.
+  The password is NOT stored here on purpose (this file is in git). Navicat asks for it on first connect;
+  tick "Save password" there if you want. Values match deploy/.env.live.example.
+-->
+<Connections Ver="1.5">
+<Connection ConnectionName="live_converter" ConnType="MYSQL" Host="192.168.90.223" Port="3306" UserName="sfc_app" Password="" SavePassword="false" InitialDatabase="live_converter" Encoding="65001" UseCompression="false" UseSSL="false" UseSSH="false" UseHTTP="false" AutoConnect="false" KeepAliveInterval="240" Compatibility_OverrideIsSupportNDB="false" Compatibility_IsSupportNDB="false">
+<Databases>
+<Database DatabaseName="live_converter" Visible="true"/>
+</Databases>
+</Connection>
+</Connections>

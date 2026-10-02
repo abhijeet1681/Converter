@@ -1,7 +1,12 @@
 // ConvertHub file archive — OPT-IN copy of every input/output file (ARCHIVE_FILES=true)
 // 1. The browser uploads input + output to /api/archive right after a conversion finishes.
 // 2. We save it on local disk first (ARCHIVE_DIR/YYYY/MM/DD/<conversion-id>/<role>-<name>) — fast and reliable.
-// 3. A background queue uploads it to the owner's Google Drive folder via rclone (GDRIVE_* settings).
+// 3. It is uploaded to the owner's Google Drive folder, by one of two backends:
+//      • "api"    — Google Drive REST API with the owner's own login (GDRIVE_CLIENT_ID/SECRET/REFRESH_TOKEN,
+//                   from `npm run gdrive:auth`). No binary, no disk needed → the only option on Vercel.
+//      • "rclone" — the rclone remote GDRIVE_REMOTE, when the three API values are empty (laptop / VPS).
+//    Long-running server: a background queue, one at a time, retried. Serverless: uploaded immediately,
+//    inside the request, because the function may be frozen the moment it answers.
 // 4. A daily sweeper deletes local + Drive copies older than ARCHIVE_KEEP_DAYS (0 = keep forever).
 // When ARCHIVE_FILES=false (default) nothing in this file does anything — the site keeps its "no upload" promise.
 import fs from 'node:fs';
@@ -11,17 +16,24 @@ import os from 'node:os';
 import { execFile } from 'node:child_process';
 import { promisify } from 'node:util';
 import { fileURLToPath } from 'node:url';
+import * as gdrive from './gdrive.js';
 
 const execFileP = promisify(execFile);
 const ROOT = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..');
+const SERVERLESS = Boolean(process.env.VERCEL || process.env.AWS_LAMBDA_FUNCTION_NAME || process.env.NETLIFY);
+const maxMb = Number(process.env.ARCHIVE_MAX_FILE_MB) || 50;
 
 const cfg = {
   enabled: process.env.ARCHIVE_FILES === 'true',
-  dir: path.resolve(ROOT, process.env.ARCHIVE_DIR || 'archive'),
+  serverless: SERVERLESS,
+  // Serverless: only /tmp is writable and it is wiped between invocations — a staging area, never storage.
+  dir: SERVERLESS ? path.join(os.tmpdir(), 'converthub-archive') : path.resolve(ROOT, process.env.ARCHIVE_DIR || 'archive'),
   keepDays: Number(process.env.ARCHIVE_KEEP_DAYS ?? 30),
-  maxFileMb: Number(process.env.ARCHIVE_MAX_FILE_MB) || 50,
+  // Vercel rejects request bodies over 4.5 MB before they reach us — tell the browser to skip bigger files.
+  maxFileMb: SERVERLESS ? Math.min(maxMb, 4) : maxMb,
   drive: {
     enabled: process.env.GDRIVE_ENABLED === 'true',
+    backend: gdrive.configured() ? 'api' : 'rclone',
     remote: process.env.GDRIVE_REMOTE || 'gdrive',
     folder: (process.env.GDRIVE_FOLDER || 'ConvertHub').replace(/^\/+|\/+$/g, ''),
     folderId: process.env.GDRIVE_FOLDER_ID || '',
@@ -44,21 +56,28 @@ async function findRclone() {
 }
 
 let rclone = null;
-let driveState = { configured: false, ok: false, error: null, checkedAt: 0, folderUrl: cfg.drive.folderId ? `https://drive.google.com/drive/folders/${cfg.drive.folderId}` : null };
+let driveState = { configured: false, ok: false, error: null, account: null, checkedAt: 0, folderUrl: cfg.drive.folderId ? gdrive.folderUrl(cfg.drive.folderId) : null };
 const rc = (args, timeout = 120000) => execFileP(rclone, args, { timeout, windowsHide: true, maxBuffer: 20 * 1024 * 1024 });
 
-/** Is the Drive remote authorised and reachable? Cached 60 s. */
+/** Is Drive authorised and reachable (API login or rclone remote)? Cached 60 s. */
 export async function checkDrive(force = false) {
   if (!cfg.enabled || !cfg.drive.enabled) return driveState;
   if (!force && Date.now() - driveState.checkedAt < 60000) return driveState;
   const next = { ...driveState, checkedAt: Date.now() };
   try {
-    rclone ||= await findRclone();
-    if (!rclone) throw new Error('rclone is not installed (winget install Rclone.Rclone)');
-    const { stdout } = await rc(['listremotes'], 15000);
-    next.configured = stdout.split(/\r?\n/).includes(`${cfg.drive.remote}:`);
-    if (!next.configured) throw new Error(`rclone remote "${cfg.drive.remote}" is not set up yet — run the one-time login command (see README → Google Drive archive)`);
-    await rc(['lsd', `${cfg.drive.remote}:`, '--max-depth', '1'], 30000);
+    if (cfg.drive.backend === 'api') {
+      next.configured = true;
+      const r = await gdrive.check();
+      if (!r.ok) throw new Error(r.error);
+      next.folderUrl = r.folderUrl; next.account = r.account;
+    } else {
+      rclone ||= await findRclone();
+      if (!rclone) throw new Error('rclone is not installed (winget install Rclone.Rclone) — or set GDRIVE_CLIENT_ID/SECRET/REFRESH_TOKEN (npm run gdrive:auth) to upload without rclone');
+      const { stdout } = await rc(['listremotes'], 15000);
+      next.configured = stdout.split(/\r?\n/).includes(`${cfg.drive.remote}:`);
+      if (!next.configured) throw new Error(`rclone remote "${cfg.drive.remote}" is not set up yet — run the one-time login command (see README → Google Drive archive)`);
+      await rc(['lsd', `${cfg.drive.remote}:`, '--max-depth', '1'], 30000);
+    }
     next.ok = true; next.error = null;
   } catch (e) {
     next.ok = false; next.error = String(e.stderr || e.message).split('\n')[0].slice(0, 300);
@@ -68,11 +87,20 @@ export async function checkDrive(force = false) {
 }
 
 export function archiveStatus() {
-  return { enabled: cfg.enabled, dir: cfg.dir, keepDays: cfg.keepDays, maxFileMb: cfg.maxFileMb, drive: { enabled: cfg.drive.enabled, remote: cfg.drive.remote, folder: cfg.drive.folder, ...driveState, queue: queue.length, uploading } };
+  return { enabled: cfg.enabled, serverless: cfg.serverless, dir: cfg.dir, keepDays: cfg.keepDays, maxFileMb: cfg.maxFileMb, drive: { enabled: cfg.drive.enabled, backend: cfg.drive.backend, remote: cfg.drive.remote, folder: cfg.drive.folder, ...driveState, queue: queue.length, uploading } };
 }
 export const archiveConfig = () => cfg;
 
 // ---------- local save ----------
+// Enough MIME types for Drive to show previews; anything else is a plain download.
+const MIMES = { jpg: 'image/jpeg', jpeg: 'image/jpeg', png: 'image/png', webp: 'image/webp', gif: 'image/gif', bmp: 'image/bmp', svg: 'image/svg+xml', avif: 'image/avif', heic: 'image/heic', tif: 'image/tiff', tiff: 'image/tiff', ico: 'image/x-icon',
+  pdf: 'application/pdf', txt: 'text/plain', md: 'text/markdown', html: 'text/html', csv: 'text/csv', json: 'application/json', xml: 'application/xml', zip: 'application/zip', srt: 'text/plain', vtt: 'text/vtt',
+  doc: 'application/msword', docx: 'application/vnd.openxmlformats-officedocument.wordprocessingml.document', odt: 'application/vnd.oasis.opendocument.text', rtf: 'application/rtf',
+  ppt: 'application/vnd.ms-powerpoint', pptx: 'application/vnd.openxmlformats-officedocument.presentationml.presentation', odp: 'application/vnd.oasis.opendocument.presentation',
+  xls: 'application/vnd.ms-excel', xlsx: 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet', ods: 'application/vnd.oasis.opendocument.spreadsheet',
+  mp3: 'audio/mpeg', wav: 'audio/wav', m4a: 'audio/mp4', aac: 'audio/aac', ogg: 'audio/ogg', flac: 'audio/flac', opus: 'audio/opus',
+  mp4: 'video/mp4', webm: 'video/webm', mov: 'video/quicktime', avi: 'video/x-msvideo', mkv: 'video/x-matroska' };
+const mimeOf = name => MIMES[String(name).split('.').pop().toLowerCase()] || 'application/octet-stream';
 const safeName = n => String(n || 'file').split(/[\\/]/).pop().replace(/[<>:"|?*\u0000-\u001F]/g, '_').slice(0, 180) || 'file';
 const dayDir = (d = new Date()) => path.join(String(d.getFullYear()), String(d.getMonth() + 1).padStart(2, '0'), String(d.getDate()).padStart(2, '0'));
 
@@ -91,40 +119,64 @@ export const absPath = rel => {
   return p;
 };
 
-// ---------- Google Drive upload queue (one at a time, retried) ----------
+// ---------- Google Drive upload (queue on a server, immediate on serverless) ----------
 const queue = [];
 let uploading = false;
 let onDriveDone = null; // (fileId, {drive_file_id, drive_url}) => void — set by server.js to write back to MySQL
 export const setDriveCallback = fn => { onDriveDone = fn; };
 
-export function enqueueDrive(fileId, rel) {
-  if (!cfg.enabled || !cfg.drive.enabled) return;
-  queue.push({ fileId, rel, tries: 0 });
-  pump();
+/** Upload one archived file to Drive. Resolves { id, url } — throws on failure. */
+async function uploadOne(rel) {
+  const st = await checkDrive();
+  if (!st.ok) throw new Error(st.error || 'Drive not ready');
+  const local = absPath(rel);
+  if (!fs.existsSync(local)) throw Object.assign(new Error(`local copy is gone: ${rel}`), { fatal: true });
+  // 2026/10/02/<id>/input-x.jpg on disk  →  ConvertHub/2026-10-02/<id>/input-x.jpg on Drive
+  const parts = rel.split('/');
+  const [y, m, d, ...rest] = parts;
+  const name = rest.pop();
+  const folders = [cfg.drive.folder, `${y}-${m}-${d}`, ...rest];
+  if (cfg.drive.backend === 'api') return gdrive.uploadFile(local, { name, mime: mimeOf(name), parts: folders });
+  const target = `${cfg.drive.remote}:${folders.join('/')}/${name}`;
+  await rc(['copyto', local, target, '--drive-chunk-size', '32M', '--retries', '3', '--low-level-retries', '10'], 15 * 60 * 1000);
+  // Fetch the Drive file id so the dashboard can link straight to it
+  let id = null;
+  try {
+    const { stdout } = await rc(['lsjson', target, '--no-mimetype', '--no-modtime'], 60000);
+    id = JSON.parse(stdout)?.[0]?.ID || null;
+  } catch { /* link will fall back to the folder */ }
+  return { id, url: id ? gdrive.fileUrl(id) : driveState.folderUrl };
+}
+
+/**
+ * Send an archived file to Drive. On a server: queued in the background, resolves null at once.
+ * On serverless: uploaded right now (awaited by the request), local staging copy removed, resolves { id, url }.
+ */
+export async function enqueueDrive(fileId, rel) {
+  if (!cfg.enabled || !cfg.drive.enabled) return null;
+  if (!cfg.serverless) { queue.push({ fileId, rel, tries: 0 }); pump(); return null; }
+  try {
+    const r = await uploadOne(rel);
+    if (fileId) await onDriveDone?.(fileId, { drive_file_id: r.id, drive_url: r.url });
+    return r;
+  } catch (e) {
+    console.error(`[archive] Drive upload failed for ${rel}: ${String(e.message).slice(0, 200)}`);
+    return null;
+  } finally {
+    fsp.unlink(absPath(rel)).catch(() => {});
+  }
 }
 async function pump() {
   if (uploading || !queue.length) return;
   uploading = true;
   const job = queue.shift();
   try {
-    const st = await checkDrive();
-    if (!st.ok) throw new Error(st.error || 'Drive not ready');
-    const local = absPath(job.rel);
-    const remotePath = `${cfg.drive.folder}/${job.rel.replace(/^(\d{4})\/(\d{2})\/(\d{2})\//, '$1-$2-$3/')}`;
-    const target = `${cfg.drive.remote}:${remotePath}`;
-    await rc(['copyto', local, target, '--drive-chunk-size', '32M', '--retries', '3', '--low-level-retries', '10'], 15 * 60 * 1000);
-    // Fetch the Drive file id so the dashboard can link straight to it
-    let id = null;
-    try {
-      const { stdout } = await rc(['lsjson', target, '--no-mimetype', '--no-modtime'], 60000);
-      id = JSON.parse(stdout)?.[0]?.ID || null;
-    } catch { /* link will fall back to the folder */ }
-    const url = id ? `https://drive.google.com/file/d/${id}/view` : driveState.folderUrl;
-    await onDriveDone?.(job.fileId, { drive_file_id: id, drive_url: url });
+    const r = await uploadOne(job.rel);
+    if (job.fileId) await onDriveDone?.(job.fileId, { drive_file_id: r.id, drive_url: r.url });
   } catch (e) {
     job.tries++;
     const msg = String(e.stderr || e.message).split('\n')[0].slice(0, 200);
-    if (job.tries < 5) { console.warn(`[archive] Drive upload failed (${job.tries}/5), will retry: ${msg}`); setTimeout(() => { queue.push(job); pump(); }, 60000 * job.tries); }
+    if (!e.fatal && job.tries < 5) { console.warn(`[archive] Drive upload failed (${job.tries}/5), will retry: ${msg}`); setTimeout(() => { queue.push(job); pump(); }, 60000 * job.tries); }
     else console.error(`[archive] Drive upload gave up for ${job.rel}: ${msg}`);
   } finally {
     uploading = false;
@@ -133,7 +185,10 @@ async function pump() {
 }
 
 /** Re-queue files that are on disk but never reached Drive (e.g. Drive was offline / not yet authorised). */
-export async function resumePending(rows) { for (const r of rows || []) enqueueDrive(r.id, r.storage_path); }
+export async function resumePending(rows) {
+  if (cfg.serverless) return; // nothing survives on /tmp between invocations
+  for (const r of rows || []) if (fs.existsSync(absPath(r.storage_path))) enqueueDrive(r.id, r.storage_path);
+}
 
 // ---------- retention sweeper ----------
 export async function sweep(deleteRowsOlderThan) {
@@ -151,8 +206,10 @@ export async function sweep(deleteRowsOlderThan) {
   }
   await walk(cfg.dir);
   if (cfg.drive.enabled && (await checkDrive()).ok) {
-    try { await rc(['delete', `${cfg.drive.remote}:${cfg.drive.folder}`, '--min-age', `${cfg.keepDays}d`], 10 * 60 * 1000); await rc(['rmdirs', `${cfg.drive.remote}:${cfg.drive.folder}`, '--leave-root'], 5 * 60 * 1000); }
-    catch (e) { console.warn('[archive] Drive sweep failed:', String(e.stderr || e.message).split('\n')[0]); }
+    try {
+      if (cfg.drive.backend === 'api') await gdrive.trashOlderThan(cfg.keepDays, cfg.drive.folder);
+      else { await rc(['delete', `${cfg.drive.remote}:${cfg.drive.folder}`, '--min-age', `${cfg.keepDays}d`], 10 * 60 * 1000); await rc(['rmdirs', `${cfg.drive.remote}:${cfg.drive.folder}`, '--leave-root'], 5 * 60 * 1000); }
+    } catch (e) { console.warn('[archive] Drive sweep failed:', String(e.stderr || e.message).split('\n')[0]); }
   }
   await deleteRowsOlderThan?.(cfg.keepDays);
   return { local: removed };
@@ -173,7 +230,8 @@ export async function diskUsage() {
 export async function initArchive() {
   if (!cfg.enabled) return false;
   await fsp.mkdir(cfg.dir, { recursive: true });
-  if (cfg.drive.enabled) await checkDrive(true);
+  // Serverless: don't spend cold-start time on a Drive round-trip — the first upload checks it anyway.
+  if (cfg.drive.enabled && !cfg.serverless) await checkDrive(true);
   return true;
 }
 export const rclonePath = () => rclone;
