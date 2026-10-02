@@ -323,7 +323,7 @@ img, video { max-width: 100%; }
 .notice { margin-top: 14px; padding: 12px 16px; border-radius: 12px; font-size: 14px; background: color-mix(in srgb, var(--warn) 12%, var(--surface-solid)); border: 1px solid color-mix(in srgb, var(--warn) 40%, transparent); animation: rise .4s var(--ease); }
 .notice.info { background: color-mix(in srgb, var(--primary) 12%, var(--surface-solid)); border-color: color-mix(in srgb, var(--primary) 40%, transparent); }
 .actions { display: flex; gap: 10px; justify-content: center; flex-wrap: wrap; margin: 22px 0 6px; }
-.queue-head[hidden], .actions[hidden], .results[hidden], .notice[hidden], .feedback-box[hidden], .smart-result[hidden] { display: none; }
+.queue-head[hidden], .actions[hidden], .results[hidden], .notice[hidden], .feedback-box[hidden], .smart-result[hidden], .ticker[hidden] { display: none; }
 .queue-head { display: flex; justify-content: space-between; align-items: center; margin: 18px 0 8px; font-size: 14px; color: var(--muted); }
 .queue, .out-list { list-style: none; margin: 0; padding: 0; display: grid; gap: 8px; }
 .qi, .out { display: flex; align-items: center; gap: 12px; padding: 11px 13px; border-radius: 14px; background: var(--surface); border: 1px solid var(--border); animation: rise .4s var(--ease); transition: border-color .3s; }
@@ -569,6 +569,8 @@ main > * { animation: pagein .45s var(--ease) both; }
   content: ""; position: absolute; left: .02em; right: .02em; bottom: -.04em; height: .13em; border-radius: 99px; z-index: -1;
   background: var(--grad-india); opacity: .85; transform: skewX(-12deg); box-shadow: 0 6px 24px -6px rgba(255, 153, 51, .5);
 }
+/* light theme: keep the white band visible against the pale background */
+[data-theme="light"] .hero h1 .ul::after { opacity: 1; box-shadow: 0 0 0 1px rgba(19, 20, 43, .1), 0 6px 20px -8px rgba(0, 0, 0, .25); }
 
 /* animated rainbow glow around the hero search, brighter while typing */
 @property --a { syntax: '<angle>'; inherits: false; initial-value: 0deg; }
@@ -584,7 +586,8 @@ main > * { animation: pagein .45s var(--ease) both; }
 .hero-stats { margin-top: 30px; }
 
 /* ===== Quick convert tiles (FROM → TO) ===== */
-.quick-grid { display: grid; grid-template-columns: repeat(auto-fill, minmax(150px, 1fr)); gap: 10px; }
+.quick-grid { display: grid; grid-template-columns: repeat(8, 1fr); gap: 10px; } /* 16 tiles = always full rows: 8 / 4 / 2 */
+@media (max-width: 1100px) { .quick-grid { grid-template-columns: repeat(4, 1fr); } }
 .quick {
   position: relative; display: flex; flex-direction: column; align-items: center; gap: 9px; padding: 18px 10px 14px; border-radius: 16px; overflow: hidden;
   background: var(--surface); border: 1px solid var(--border); color: var(--text); text-align: center; backdrop-filter: blur(8px);
@@ -595,7 +598,7 @@ main > * { animation: pagein .45s var(--ease) both; }
 .quick:hover::before { opacity: 1; }
 .quick > * { position: relative; }
 .quick .pair { display: inline-flex; align-items: center; gap: 6px; }
-.quick .ext { min-width: 46px; padding: 8px 8px; border-radius: 10px; font: 800 11px/1 ui-monospace, Menlo, monospace; letter-spacing: .04em; background: var(--surface-2); color: var(--text); }
+.quick .ext { min-width: 44px; padding: 8px 7px; border-radius: 10px; font: 800 11px/1 ui-monospace, Menlo, monospace; letter-spacing: .04em; background: var(--surface-2); color: var(--text); }
 .quick .ext.to { background: linear-gradient(135deg, var(--cat, var(--primary)), var(--cat2, var(--primary-2))); color: #fff; box-shadow: 0 8px 18px -10px var(--cat, var(--primary)); }
 .quick .arrow { color: var(--muted); font-size: 15px; font-weight: 700; transition: transform .25s var(--ease), color .25s; }
 .quick:hover .arrow { transform: translateX(4px); color: var(--cat, var(--primary)); }
@@ -651,6 +654,8 @@ main > * { animation: pagein .45s var(--ease) both; }
 
 @media (max-width: 700px) {
   .quick-grid { grid-template-columns: repeat(2, 1fr); }
+  .header-search .kbd { display: none; } /* no keyboard shortcut hint on phones — it overlapped the placeholder */
+  .header-search input { padding-right: 12px; }
   .cta-banner { padding: 38px 18px; border-radius: 22px; }
   .hero h1 .ul::after { height: .11em; }
 }

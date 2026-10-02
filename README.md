@@ -40,7 +40,7 @@ Settings live in `.env` (already created for this machine). `.env.example` docum
 | What | Details |
 |---|---|
 | **Dark mode default** | Every visitor starts in dark mode. The 🌙/☀️ button (top right) switches to light; the choice is remembered in the browser. |
-| **Indian identity** | Saffron–white–green line at the very top, saffron accent colour on AI features, "Made with ❤️ in India 🇮🇳" in the footer, `₹0` pricing, Indian number formatting (`1,00,000`), Hindi-friendly font stack. |
+| **Indian identity** | Saffron–white–green line at the very top, saffron accent colour on AI features, a real SVG Tiranga with the Ashoka Chakra (24 spokes, navy blue — sprite `#flag-in` in `index.html`) in the hero badge and footer, `₹0` pricing, Indian number formatting (`1,00,000`), Hindi-friendly font stack. |
 | **Animations** | Slow-drifting aurora background, shimmering gradient headline that rotates words ("any file → PDF → photos → … → with AI"), cards that lift and glow on hover, sections that fade in as you scroll, animated progress bars, pulsing "live" dot, a format marquee, bouncing upload icon when you drag a file, **confetti 🎉 when a conversion succeeds**. Everything respects the OS "reduce motion" setting. |
 | **Smart Drop (home page)** | "Not sure which tool? Drop any file here" — detects the file type and shows the 8 tools that can handle it. Pick one and the file is already loaded on the tool page. Nothing is uploaded. |
 | **Command palette** | Press **Ctrl + K** anywhere → instant fuzzy search over all tools. Type a sentence and press **Tab** (or Enter with no match) → the AI picks the right tool. |
@@ -220,12 +220,34 @@ ConvertHub has **two halves**:
 | **115+ browser tools** (image, PDF, Excel, audio, video, ZIP, PDF→Word…) | Just static files | ✅ Yes — perfectly |
 | **Server features**: MySQL analytics + admin dashboard, AI (Ollama/Whisper), Google Drive archive, LibreOffice Office→PDF | A machine that runs 24×7 with those services on it | ❌ No — Vercel is "serverless": no MySQL, no Docker, no disk, functions die after each request |
 
-**Vercel (`vercel.json` + `api/index.js`, added 2 Oct 2026)** — the repo now deploys cleanly: static files go to Vercel's CDN,
-Express runs as a function, and `server.js` detects `VERCEL` and switches the server-only features off automatically
-(cold start ≈ 0.7 s, verified locally). Your site works as a fast, free, privacy-first converter — analytics/AI/archive
-simply show "not available" notices. **Do not commit `.env`** — it is laptop-specific (D:\ paths, 127.0.0.1 services) and
-would break the Vercel function. Set variables in Vercel → Project → Settings → Environment Variables if you later point
-`DB_HOST` at a cloud MySQL (PlanetScale/Aiven) or `OLLAMA_URL` at a GPU box.
+**✅ LIVE on Vercel (since 2 Oct 2026, 17:25 IST)**
+
+* **https://converthub-india.vercel.app** (added by me) and **https://converter-dusky-nine.vercel.app** (Vercel's default) —
+  both are public production URLs of the same deployment. Region `bom1` (Mumbai).
+* Verified from a real headless Chrome against the live site: home loads, JPG→PNG and JPG→PDF convert, `crossOriginIsolated=true`
+  (so FFmpeg video/audio tools work), all static assets incl. the 32 MB FFmpeg wasm served with 30-day cache, security headers
+  present, zero JavaScript errors, mobile layout OK. Warm response ≈ 0.4 s; the very first request after a deploy is a ~3 s cold start.
+* URLs of the form `converter-<hash>-abhijeet-jadhavs-projects-….vercel.app` and `converter-abhijeet-jadhavs-projects-….vercel.app`
+  redirect to a Vercel login — that is **Deployment Protection ("Standard")**, which protects per-deployment URLs but leaves the
+  production domains above public. Normal. To make *every* URL public: Project → Settings → Deployment Protection → Off.
+
+**Why the first five deployments failed (so you recognise it next time)**
+
+| Deployment | Status | Cause | Fix |
+|---|---|---|---|
+| #1 (from the dashboard) | "Ready" but 500 `FUNCTION_INVOCATION_FAILED` | `server.js` was a plain long-running server: `app.listen`, dynamic `import()` of files the bundler couldn't see, startup probes of 127.0.0.1 services | `api/index.js` adapter + `SERVERLESS` branch in `server.js` |
+| #2 | Error after 1 s | `vercel.json` had an invalid JSON escape (`\.`) | fixed JSON |
+| #3, #4 | **Blocked** — "commit author doesn't have permission" | commits were authored as `abhijeet-edulab`, but the Vercel account is `abhijeet1681`. **Adding `abhijeet-edulab` as a GitHub collaborator does not help** — Vercel checks the *Vercel* team, not GitHub. On the Hobby plan only the owner can trigger deploys. | this repo's git identity is now set to `abhijeet1681` (`git config user.name/email`, local to this folder), so pushes from here deploy |
+| #5 | Ready but still 500 | you had pasted **all 32 `.env` values into Vercel's Environment Variables**, so `ARCHIVE_FILES=true` + `ARCHIVE_DIR=D:\converthub-archive` made the function try to `mkdir D:\…` on Linux → crash. `vendor/*.wasm` was 404 because the legacy `builds` config never copied the generated libraries into the static output. | `server.js` now **forces** archive/Office off on serverless and treats `127.0.0.1` DB/AI URLs as "off"; `vercel.json` rewritten (`buildCommand: npm run vendor`, `outputDirectory: public`) |
+| #6 (`a7af4f9`) | ✅ **Ready & working** | | |
+
+The 32 environment variables you added in Vercel are now **harmless** (the code ignores laptop-only values), but they are
+noise — you can delete them all (Project → Settings → Environment Variables). Only set variables there if you later point
+`DB_HOST` at a cloud MySQL (Aiven / PlanetScale / Railway) or `OLLAMA_URL` at a GPU server with a public URL; then analytics,
+the admin dashboard and the AI tools come alive on Vercel too. `ARCHIVE_FILES` and LibreOffice can never work on Vercel
+(no disk, no binaries) — they need the VPS below.
+
+**Do not commit `.env`** — it is laptop-specific and would break the Vercel function. `.env.example` documents everything.
 
 **Full features = VPS** (Hostinger / DigitalOcean / Hetzner, ₹400–800/month, Ubuntu). Follow "Deploy → Option A" below.
 On that server: `sudo apt install mysql-server libreoffice rclone`, install Ollama (`curl -fsSL https://ollama.com/install.sh | sh && ollama pull qwen2.5:3b`),

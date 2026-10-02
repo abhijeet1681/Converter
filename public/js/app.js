@@ -282,12 +282,15 @@ function homeView() {
   const rt = setInterval(() => { const s = rot.children; s[ri].classList.remove('on'); ri = (ri + 1) % s.length; s[ri].classList.add('on'); }, 2200);
   cleanups.push(() => clearInterval(rt));
 
-  // live counters from the database
+  // Static facts first; the two middle boxes switch to live DB counters only when there is real data
+  // (on hosts without MySQL — e.g. Vercel — the site must never show "0 files converted").
   const stats = h('div', { class: 'hero-stats' },
-    statBox(`${TOOLS.length}+`, 'free tools'), statBox('0', 'files converted', 'conv'), statBox('0 MB', 'processed', 'mb'), statBox('₹0', 'forever'));
+    statBox(`${TOOLS.length}+`, 'free tools'), statBox(String(CATEGORIES.length), 'categories', 'conv'), statBox('0', 'uploads for most tools', 'mb'), statBox('₹0', 'forever'));
   fetch('/api/stats').then(r => r.json()).then(s => {
-    countUp(stats.querySelector('[data-k="conv"] b'), s.conversions);
-    stats.querySelector('[data-k="mb"] b').textContent = s.bytes > 1e9 ? `${(s.bytes / 1e9).toFixed(1)} GB` : `${Math.round(s.bytes / 1e6)} MB`;
+    if (s.conversions > 0) {
+      const c = stats.querySelector('[data-k="conv"]'); c.querySelector('span').textContent = 'files converted'; c.querySelector('b').textContent = '0'; countUp(c.querySelector('b'), s.conversions);
+      const m = stats.querySelector('[data-k="mb"]'); m.querySelector('span').textContent = 'processed'; m.querySelector('b').textContent = s.bytes > 1e9 ? `${(s.bytes / 1e9).toFixed(1)} GB` : `${Math.round(s.bytes / 1e6)} MB`;
+    }
     (s.trending || []).forEach(id => trending.add(id));
     if (trending.size) {
       draw();
