@@ -211,6 +211,38 @@ Verified: real conversion → `D:\converthub-archive\2026\10\02\4\input-test.jpg
 rows 7 & 8 in `files` → admin ⬇ link returns the file (HTTP 200, 134 bytes) → privacy text shown. Drive upload is
 pending only the login above.
 
+### 4b-ii. 🗄️ The two databases on your local MySQL (`mysql8`) — connection details
+
+Both live on the **same MySQL server** (the `mysql8` Docker container, port 3306). Both have the identical 10 tables + 6 views.
+A dedicated login was created on **2 Oct 2026** so you never have to share `root`:
+
+| | **`converthub`** (development) | **`live_converter`** (production data) |
+|---|---|---|
+| Written by | the site running on this laptop (`npm start`, :7683) | the public website, once it can reach this server (see "Reachability") |
+| Host (same laptop) | `127.0.0.1` | `127.0.0.1` |
+| Host (another laptop, same Wi-Fi/LAN) | `10.182.60.251` *(this PC's LAN IP — changes if the router reassigns it; check with `ipconfig`)* | same |
+| Port | `3306` | `3306` |
+| Username | `converthub_live` | `converthub_live` |
+| Password | `ConvertHub#Live2026!` | `ConvertHub#Live2026!` |
+| Rights | ALL on `converthub` and `live_converter` **only** — cannot see `unified_master`, the `*_sfcunified` tenants or anything else | same |
+| `.env` / Vercel value | `DB_NAME=converthub` | `DB_NAME=live_converter` or `DATABASE_URL=mysql://converthub_live:ConvertHub%23Live2026!@HOST:3306/live_converter` |
+
+**Navicat → New Connection → MySQL** on *any* laptop: Connection name `ConvertHub Live`, Host as above, Port `3306`,
+User `converthub_live`, Password `ConvertHub#Live2026!` → Test Connection → OK. You will see both databases.
+(`root` / `root` still works too, but use the dedicated login on other machines.)
+
+**Reachability — be clear about this:**
+
+| From | Can reach `live_converter` on mysql8? | What's needed |
+|---|---|---|
+| This laptop | ✅ yes | nothing |
+| Another laptop on the **same Wi-Fi** | ✅ yes, via `10.182.60.251` | one-time Windows firewall rule (run **as Administrator**): `netsh advfirewall firewall add rule name="MySQL 3306 LAN" dir=in action=allow protocol=TCP localport=3306 profile=private` |
+| **Vercel** (converthub-india.vercel.app) | ❌ **no** — Vercel's servers are on the internet; your laptop has a private IP behind the home/office router, and sleeps | either a **tunnel** (Cloudflare Tunnel / ngrok TCP — breaks whenever this laptop is off) or move `live_converter` to a **cloud MySQL** (TiDB Cloud / Aiven free tier, then set `DATABASE_URL` in Vercel). Moving is one Navicat "Data Transfer" from this server to the cloud one — same schema |
+| A **VPS** running ConvertHub | ✅ if MySQL runs on the VPS itself (recommended) | `DB_NAME=live_converter` in the VPS `.env`; load `deploy/live_converter.sql` once |
+
+Password is also in `.env.example` comments? **No** — on purpose. It lives here in README because the GitHub repo is **private**.
+If the repo ever becomes public, change it: `ALTER USER 'converthub_live'@'%' IDENTIFIED BY 'new-password';` in Navicat.
+
 ### 4c. 🚀 Deploying — Vercel vs a real server (read before choosing)
 
 ConvertHub has **two halves**:
