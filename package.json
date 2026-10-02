@@ -1,0 +1,32 @@
+{
+  "name": "converthub",
+  "version": "1.0.0",
+  "description": "ConvertHub - all-in-one, privacy-first file converter (image, PDF, documents, spreadsheets, audio, video, archives).",
+  "type": "module",
+  "main": "server.js",
+  "private": true,
+  "license": "MIT",
+  "scripts": {
+    "postinstall": "node scripts/copy-vendor.js",
+    "vendor": "node scripts/copy-vendor.js",
+    "start": "node server.js",
+    "dev": "node --watch server.js"
+  },
+  "engines": {
+    "node": ">=18.17"
+  },
+  "dependencies": {
+    "@ffmpeg/core": "0.12.6",
+    "@ffmpeg/ffmpeg": "0.12.10",
+    "compression": "^1.7.4",
+    "express": "^4.21.2",
+    "heic2any": "0.0.4",
+    "jszip": "3.10.1",
+    "mammoth": "1.8.0",
+    "multer": "^2.0.0",
+    "mysql2": "^3.24.5",
+    "pdf-lib": "1.17.1",
+    "pdfjs-dist": "3.11.174",
+    "xlsx": "https://cdn.sheetjs.com/xlsx-0.20.3/xlsx-0.20.3.tgz"
+  }
+}

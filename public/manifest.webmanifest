@@ -1,0 +1,10 @@
+{
+  "name": "ConvertHub — All-in-One File Converter",
+  "short_name": "ConvertHub",
+  "description": "Convert images, PDFs, documents, spreadsheets, audio and video privately in your browser.",
+  "start_url": "/",
+  "display": "standalone",
+  "background_color": "#0c0c17",
+  "theme_color": "#6d5dfc",
+  "icons": [{ "src": "/favicon.svg", "sizes": "any", "type": "image/svg+xml", "purpose": "any" }]
+}

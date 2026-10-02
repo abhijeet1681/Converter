@@ -1,0 +1,11 @@
+services:
+  converthub:
+    build: .
+    container_name: converthub
+    restart: unless-stopped
+    ports:
+      - "3000:3000"
+    environment:
+      - SITE_URL=
+      - MAX_UPLOAD_MB=100
+      - TRUST_PROXY=false
