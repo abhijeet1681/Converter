@@ -199,6 +199,15 @@ function initHeader() {
     track.event('theme_change', null, { theme: t });
   });
   const y = $('#year'); if (y) y.textContent = new Date().getFullYear();
+  // 3D tilt + spotlight on any .tilt card (one delegated listener, cheap)
+  document.addEventListener('pointermove', e => {
+    const el = e.target.closest?.('.tilt'); if (!el) return;
+    const r = el.getBoundingClientRect(), x = (e.clientX - r.left) / r.width, y = (e.clientY - r.top) / r.height;
+    el.style.setProperty('--ry', `${(x - .5) * 10}deg`); el.style.setProperty('--rx', `${(.5 - y) * 8}deg`);
+    el.style.setProperty('--mx', `${x * 100}%`); el.style.setProperty('--my', `${y * 100}%`);
+  }, { passive: true });
+  const prog = h('div', { class: 'scroll-progress', 'aria-hidden': 'true' }); document.body.append(prog);
+  window.addEventListener('scroll', () => { const d = document.documentElement; prog.style.width = `${100 * d.scrollTop / Math.max(1, d.scrollHeight - d.clientHeight)}%`; }, { passive: true });
   const top = $('#to-top');
   window.addEventListener('scroll', () => top.classList.toggle('show', scrollY > 600), { passive: true });
   top.addEventListener('click', () => window.scrollTo({ top: 0, behavior: 'smooth' }));
@@ -211,7 +220,7 @@ function toolCard(t) {
     favs.has(t.id) ? favs.delete(t.id) : favs.add(t.id); saveFavs(); fav.classList.toggle('on', favs.has(t.id)); fav.textContent = favs.has(t.id) ? '★' : '☆';
     track.event(favs.has(t.id) ? 'fav_add' : 'fav_remove', t.id);
   } }, favs.has(t.id) ? '★' : '☆');
-  return h('a', { class: 'tool-card', href: `/tools/${t.id}`, 'data-link': '' },
+  return h('a', { class: 'tool-card tilt', 'data-cat': t.cat, href: `/tools/${t.id}`, 'data-link': '' },
     h('span', { class: 'tool-icon' }, CAT.get(t.cat).icon),
     h('span', { class: 'tool-body' }, h('strong', null, t.title), h('small', null, t.desc)),
     t.ai ? h('span', { class: 'tag ai' }, '✨ AI') : t.server ? h('span', { class: 'tag', title: 'Processed on the server' }, 'Server') : trending.has(t.id) ? h('span', { class: 'tag hot' }, '🔥 Trending') : null,
@@ -305,20 +314,35 @@ function homeView() {
   window.addEventListener('dragover', onDragOver); window.addEventListener('dragleave', onDragLeave); window.addEventListener('drop', onDrop);
   cleanups.push(() => { window.removeEventListener('dragover', onDragOver); window.removeEventListener('dragleave', onDragLeave); window.removeEventListener('drop', onDrop); });
 
+  // floating file icons behind the hero
+  const FL = [['🖼️', 'JPG', 4, 14], ['📕', 'PDF', 78, 10], ['🎬', 'MP4', 88, 52], ['📊', 'XLSX', 8, 60], ['🎵', 'MP3', 92, 26], ['📝', 'DOCX', 14, 36], ['✨', 'AI', 84, 72], ['🧰', 'ZIP', 3, 82]];
+  const floaters = h('div', { class: 'floaters', 'aria-hidden': 'true' }, ...FL.map(([ic, l, x, y], i) => { const sp = h('span', { 'data-l': l }, ic); sp.style.cssText = `left:${x}%;top:${y}%;--dur:${11 + i * 1.7}s;--dx:${(i % 2 ? -1 : 1) * (14 + i * 3)}px;--dy:${-(18 + i * 4)}px;animation-delay:${-i * 2.3}s`; return sp; }));
+
+  // live activity ticker (anonymous: tool + format + time ago, from the DB)
+  const tickMsg = h('span', { class: 'msg' });
+  const ticker = h('div', { class: 'ticker', hidden: true }, h('span', { class: 'live' }, h('i'), 'LIVE'), tickMsg);
+  const ago = iso => { const m = Math.max(0, Math.round((Date.now() - new Date(iso)) / 60000)); return m < 1 ? 'just now' : m < 60 ? `${m} min ago` : m < 1440 ? `${Math.round(m / 60)} h ago` : `${Math.round(m / 1440)} d ago`; };
+  fetch('/api/activity').then(r => r.json()).then(list => {
+    if (!list.length) return;
+    ticker.hidden = false;
+    tickMsg.replaceChildren(...list.map((a, i) => h('span', { class: i === 0 ? 'on' : '' }, 'Someone used ', h('b', null, a.tool), a.from && a.to ? ` (${a.from} → ${a.to})` : '', ` · ${ago(a.at)}`)));
+    if (list.length > 1) { let ti = 0; const tt = setInterval(() => { const c = tickMsg.children; c[ti].classList.remove('on'); ti = (ti + 1) % c.length; c[ti].classList.add('on'); }, 3400); cleanups.push(() => clearInterval(tt)); }
+  }).catch(() => {});
+
   const formats = ['JPG', 'PNG', 'WEBP', 'HEIC', 'SVG', 'AVIF', 'GIF', 'PDF', 'DOCX', 'PPTX', 'XLSX', 'CSV', 'JSON', 'MP3', 'WAV', 'M4A', 'FLAC', 'MP4', 'MKV', 'MOV', 'WEBM', 'ZIP', 'SRT', 'TXT', 'MD', 'HTML', 'ODT', 'TIFF', 'ICO', 'BMP'];
   const marquee = h('div', { class: 'marquee', 'aria-hidden': 'true' }, h('div', { class: 'marquee-track' }, ...[...formats, ...formats].map(f => h('span', { class: 'fmt' }, f))));
 
   main.append(
-    h('section', { class: 'hero' }, h('div', { class: 'container' },
+    h('section', { class: 'hero' }, floaters, h('div', { class: 'container' },
       h('span', { class: 'hero-badge' }, h('span', { class: 'dot' }), '100% private · Files never leave your device · Made in India'),
       h('h1', null, 'Convert ', rot, h('br'), 'in seconds.'),
       h('p', { class: 'lead' }, `${TOOLS.length}+ free tools for images, PDFs, documents, spreadsheets, audio and video — plus private AI that summarises, translates into Indian languages and converts speech to text.`),
       h('div', { class: 'hero-search-wrap' }, search, aiBtn),
       h('div', { class: 'hero-chips' }, ...[['heic-to-jpg', 'HEIC → JPG'], ['compress-pdf', 'Compress PDF'], ['merge-pdf', 'Merge PDF'], ['video-to-mp3', 'Video → MP3'], ['ai-translate', '✨ Translate to Hindi'], ['ai-transcribe', '✨ Audio → Text']]
         .map(([id, l]) => h('button', { class: 'chip', type: 'button', onclick: () => navigate(`/tools/${id}`) }, l))),
-      stats, smart, marquee)),
+      stats, ticker, smart, marquee)),
     section(null, null, tabs, grid),
-    sectionEyebrow('Browse', 'Tools by category', null, h('div', { class: 'cat-grid stagger' }, ...CATEGORIES.map(c => h('a', { class: 'cat-card', href: `/category/${c.id}`, 'data-link': '' },
+    sectionEyebrow('Browse', 'Tools by category', null, h('div', { class: 'cat-grid stagger' }, ...CATEGORIES.map(c => h('a', { class: 'cat-card tilt', 'data-cat': c.id, href: `/category/${c.id}`, 'data-link': '' },
       h('div', { class: 'ci' }, c.icon), h('h3', null, c.name), h('p', null, c.desc), h('span', { class: 'count' }, `${TOOLS.filter(t => t.cat === c.id).length} tools →`))))),
     sectionEyebrow('Simple', 'How it works', null, h('div', { class: 'steps stagger' },
       h('div', null, h('h3', null, 'Choose a tool'), h('p', null, 'Search, browse, drop a file on the magic box, or just describe what you want to the AI.')),
@@ -755,7 +779,7 @@ function toolView(tool) {
   const related = TOOLS.filter(t => t.cat === tool.cat && t.id !== tool.id).sort((a, b) => b.popular - a.popular).slice(0, 8);
   main.append(h('section', { class: 'tool-page' }, h('div', { class: 'container' }, h('div', { class: 'tool-wrap' },
     h('nav', { class: 'breadcrumb', 'aria-label': 'Breadcrumb' }, h('a', { href: '/', 'data-link': '' }, 'Home'), '›', h('a', { href: `/category/${cat.id}`, 'data-link': '' }, cat.name), '›', h('span', null, tool.title)),
-    h('div', { class: 'tool-head' }, h('div', { class: 'big-icon' }, cat.icon), h('h1', null, tool.title), h('p', null, tool.desc),
+    h('div', { class: 'tool-head' }, h('div', { class: 'big-icon', 'data-cat': tool.cat }, cat.icon), h('h1', null, tool.title), h('p', null, tool.desc),
       h('div', { class: 'badges' },
         privacyBadge,
         tool.engine === 'media' ? h('span', { class: 'badge' }, '⚡ FFmpeg WebAssembly') : null,

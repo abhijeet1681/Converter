@@ -6,9 +6,9 @@
 import fs from 'node:fs';
 
 const cfg = {
-  ollamaUrl: (process.env.OLLAMA_URL || 'http://127.0.0.1:11434').replace(/\/+$/, ''),
+  ollamaUrl: (process.env.OLLAMA_URL ?? 'http://127.0.0.1:11434').replace(/\/+$/, ''),
   model: process.env.OLLAMA_MODEL || 'qwen2.5:3b',
-  whisperUrl: (process.env.WHISPER_URL || 'http://127.0.0.1:9000').replace(/\/+$/, ''),
+  whisperUrl: (process.env.WHISPER_URL ?? 'http://127.0.0.1:9000').replace(/\/+$/, ''),
   timeoutMs: (Number(process.env.AI_TIMEOUT_SECONDS) || 180) * 1000,
   maxChars: Number(process.env.AI_MAX_INPUT_CHARS) || 60000,
   numCtx: Number(process.env.OLLAMA_NUM_CTX) || 8192,
@@ -20,6 +20,7 @@ export async function aiHealth(force = false) {
   if (!force && Date.now() - health.checkedAt < 60000) return health;
   const next = { llm: false, model: cfg.model, models: [], whisper: false, checkedAt: Date.now() };
   try {
+    if (!cfg.ollamaUrl) throw new Error('disabled'); // empty URL = feature off (serverless)
     const r = await fetch(`${cfg.ollamaUrl}/api/tags`, { signal: AbortSignal.timeout(3000) });
     if (r.ok) {
       next.models = ((await r.json()).models || []).map(m => m.name);
@@ -29,6 +30,7 @@ export async function aiHealth(force = false) {
     }
   } catch { /* ollama offline */ }
   try {
+    if (!cfg.whisperUrl) throw new Error('disabled');
     const r = await fetch(`${cfg.whisperUrl}/docs`, { signal: AbortSignal.timeout(3000) });
     next.whisper = r.ok;
   } catch { /* whisper offline */ }

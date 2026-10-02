@@ -21,6 +21,18 @@ const pkg = JSON.parse(fs.readFileSync(path.join(__dirname, 'package.json'), 'ut
 
 loadEnvFile(path.join(__dirname, '.env'));
 
+// Serverless (Vercel): there is no MySQL, Ollama, Whisper, LibreOffice or persistent disk next to the function.
+// Default those features OFF so a cold start is instant; the 115+ in-browser tools work exactly the same.
+// Set the variables in the Vercel dashboard to point at real external services if you have them.
+const SERVERLESS = Boolean(process.env.VERCEL || process.env.AWS_LAMBDA_FUNCTION_NAME || process.env.NETLIFY);
+if (SERVERLESS) {
+  process.env.DB_ENABLED ??= 'false';
+  process.env.ARCHIVE_FILES ??= 'false';
+  process.env.ENABLE_OFFICE_CONVERSION ??= 'false';
+  process.env.OLLAMA_URL ??= '';
+  process.env.WHISPER_URL ??= '';
+}
+
 // DB + AI modules read process.env, so import them only after .env is loaded
 const db = await import('./src/db.js');
 const ai = await import('./src/ai.js');
@@ -185,6 +197,7 @@ app.post('/api/feedback', async (req, res) => {
   ok(res);
 });
 app.get('/api/stats', async (req, res) => { res.set('Cache-Control', 'public, max-age=30'); res.json(await db.publicStats()); });
+app.get('/api/activity', async (req, res) => { res.set('Cache-Control', 'public, max-age=20'); res.json(await db.recentActivity()); });
 
 // Admin dashboard data — protected by ADMIN_KEY from .env (sent as ?key= or x-admin-key header)
 app.get('/api/admin/summary', async (req, res) => {
@@ -388,7 +401,9 @@ sweepTemp();
 setInterval(sweepTemp, 60 * 60 * 1000).unref();
 if (archiveOn) { archive.sweep(db.clearExpiredArchive); setInterval(() => archive.sweep(db.clearExpiredArchive), 24 * 60 * 60 * 1000).unref(); }
 
-const server = app.listen(config.port, config.host, () => {
+export default app; // used by the serverless adapter (api/index.js on Vercel)
+
+const server = SERVERLESS ? null : app.listen(config.port, config.host, () => {
   const line = '─'.repeat(52);
   console.log(`\n${line}\n  ${SITE_NAME} v${pkg.version} is running`);
   console.log(`  ➜ Local:   http://localhost:${config.port}`);
@@ -405,14 +420,16 @@ const server = app.listen(config.port, config.host, () => {
   console.log(`${line}\n`);
   if (aiStatus.llm) ai.warmUp(); // background: load the model now so the first AI request is fast
 });
-server.on('error', e => {
-  if (e.code === 'EADDRINUSE') console.error(`\nPort ${config.port} is already in use. Change PORT in .env or stop the other program.\n`);
-  else console.error(e);
-  process.exit(1);
-});
-const shutdown = () => { server.close(async () => { await db.closeDb(); process.exit(0); }); setTimeout(() => process.exit(1), 10000).unref(); };
-process.on('SIGINT', shutdown);
-process.on('SIGTERM', shutdown);
+if (server) {
+  server.on('error', e => {
+    if (e.code === 'EADDRINUSE') console.error(`\nPort ${config.port} is already in use. Change PORT in .env or stop the other program.\n`);
+    else console.error(e);
+    process.exit(1);
+  });
+  const shutdown = () => { server.close(async () => { await db.closeDb(); process.exit(0); }); setTimeout(() => process.exit(1), 10000).unref(); };
+  process.on('SIGINT', shutdown);
+  process.on('SIGTERM', shutdown);
+}
 
 // ---------- helpers ----------
 function loadEnvFile(file) {

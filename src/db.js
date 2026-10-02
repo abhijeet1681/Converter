@@ -252,11 +252,16 @@ export async function initDb() {
     await admin.query(`CREATE DATABASE IF NOT EXISTS \`${cfg.database}\` CHARACTER SET utf8mb4 COLLATE utf8mb4_0900_ai_ci`);
     await admin.end();
     // Step 2: pool against the database + create tables/views
+    // The MySQL container runs in UTC while this server runs in IST. Force every connection to the server's
+    // own UTC offset so CURRENT_TIMESTAMP, NOW(), CURDATE() and the dates Node reads back all agree.
+    const off = -new Date().getTimezoneOffset(); // minutes east of UTC (IST = 330)
+    const tz = `${off < 0 ? '-' : '+'}${String(Math.floor(Math.abs(off) / 60)).padStart(2, '0')}:${String(Math.abs(off) % 60).padStart(2, '0')}`;
     pool = mysql.createPool({
       host: cfg.host, port: cfg.port, user: cfg.user, password: cfg.password, database: cfg.database,
-      waitForConnections: true, connectionLimit: 10, queueLimit: 0, charset: 'utf8mb4', timezone: 'local',
+      waitForConnections: true, connectionLimit: 10, queueLimit: 0, charset: 'utf8mb4', timezone: tz,
       enableKeepAlive: true, keepAliveInitialDelay: 10000, namedPlaceholders: true,
     });
+    pool.on('connection', conn => conn.query(`SET time_zone = '${tz}'`));
     for (const sql of SCHEMA) await pool.query(sql);
     await migrate();
     ready = true;
@@ -428,6 +433,15 @@ export async function publicStats() {
   const data = { conversions: Number(tot?.conversions || 0), files: Number(tot?.files || 0), bytes: Number(tot?.bytes || 0), users: Number(tot?.users || 0), trending: top.map(r => r.tool_id) };
   publicCache = { at: Date.now(), data };
   return data;
+}
+
+/** Public, anonymous "recent activity" for the home-page ticker — no ids, no names, no sessions. */
+let actCache = { at: 0, data: [] };
+export async function recentActivity() {
+  if (Date.now() - actCache.at < 20000) return actCache.data;
+  const rows = (await safe(`SELECT tool_title AS tool, from_ext AS \`from\`, to_ext AS \`to\`, started_at AS at FROM conversions WHERE status = 'success' AND tool_title IS NOT NULL ORDER BY id DESC LIMIT 8`)) || [];
+  actCache = { at: Date.now(), data: rows.map(r => ({ tool: r.tool, from: r.from ? r.from.toUpperCase() : null, to: r.to ? r.to.toUpperCase() : null, at: r.at })) };
+  return actCache.data;
 }
 
 export async function adminSummary(days = 14) {

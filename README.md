@@ -211,6 +211,29 @@ Verified: real conversion → `D:\converthub-archive\2026\10\02\4\input-test.jpg
 rows 7 & 8 in `files` → admin ⬇ link returns the file (HTTP 200, 134 bytes) → privacy text shown. Drive upload is
 pending only the login above.
 
+### 4c. 🚀 Deploying — Vercel vs a real server (read before choosing)
+
+ConvertHub has **two halves**:
+
+| Half | Needs | Works on Vercel? |
+|---|---|---|
+| **115+ browser tools** (image, PDF, Excel, audio, video, ZIP, PDF→Word…) | Just static files | ✅ Yes — perfectly |
+| **Server features**: MySQL analytics + admin dashboard, AI (Ollama/Whisper), Google Drive archive, LibreOffice Office→PDF | A machine that runs 24×7 with those services on it | ❌ No — Vercel is "serverless": no MySQL, no Docker, no disk, functions die after each request |
+
+**Vercel (`vercel.json` + `api/index.js`, added 2 Oct 2026)** — the repo now deploys cleanly: static files go to Vercel's CDN,
+Express runs as a function, and `server.js` detects `VERCEL` and switches the server-only features off automatically
+(cold start ≈ 0.7 s, verified locally). Your site works as a fast, free, privacy-first converter — analytics/AI/archive
+simply show "not available" notices. **Do not commit `.env`** — it is laptop-specific (D:\ paths, 127.0.0.1 services) and
+would break the Vercel function. Set variables in Vercel → Project → Settings → Environment Variables if you later point
+`DB_HOST` at a cloud MySQL (PlanetScale/Aiven) or `OLLAMA_URL` at a GPU box.
+
+**Full features = VPS** (Hostinger / DigitalOcean / Hetzner, ₹400–800/month, Ubuntu). Follow "Deploy → Option A" below.
+On that server: `sudo apt install mysql-server libreoffice rclone`, install Ollama (`curl -fsSL https://ollama.com/install.sh | sh && ollama pull qwen2.5:3b`),
+copy your `.env` and edit `DB_*`, `ARCHIVE_DIR=/var/converthub-archive`, and **copy your Drive login** so the archive
+reconnects without a browser: from this PC copy `C:\Users\info\AppData\Roaming\rclone\rclone.conf` to the server's
+`~/.config/rclone/rclone.conf` (e.g. with WinSCP). Then `rclone lsd gdrive:` on the server should list your folder.
+(I could not automate this copy — it is your Google token, and the tooling rightly refuses to move credentials around.)
+
 ### 5. Other new tools & fixes
 
 * **PDF to Word (DOCX)** — new, fully in-browser, keeps text and paragraph structure (the #1 missing converter in India).
