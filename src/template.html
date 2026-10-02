@@ -20,6 +20,27 @@
   <script type="application/ld+json">{"@context":"https://schema.org","@type":"WebApplication","name":"ConvertHub","applicationCategory":"UtilitiesApplication","operatingSystem":"Any (web browser)","offers":{"@type":"Offer","price":"0","priceCurrency":"INR"}}</script>
 </head>
 <body>
+  <!-- SVG sprite: Flag of India (2:3) with the Ashoka Chakra — navy blue, 24 spokes, rim + hub. Use with <svg class="flag"><use href="#flag-in"/></svg> -->
+  <svg width="0" height="0" style="position:absolute" aria-hidden="true" focusable="false">
+    <symbol id="flag-in" viewBox="0 0 900 600">
+      <rect width="900" height="200" fill="#ff9933"/>
+      <rect y="200" width="900" height="200" fill="#ffffff"/>
+      <rect y="400" width="900" height="200" fill="#138808"/>
+      <g fill="#000080" transform="translate(450 300)">
+        <circle r="70" fill="none" stroke="#000080" stroke-width="10"/>
+        <circle r="13"/>
+        <path id="flag-in-spoke" d="M0-13 3.6-40 0-65-3.6-40Z"/>
+        <use href="#flag-in-spoke" transform="rotate(15)"/><use href="#flag-in-spoke" transform="rotate(30)"/><use href="#flag-in-spoke" transform="rotate(45)"/>
+        <use href="#flag-in-spoke" transform="rotate(60)"/><use href="#flag-in-spoke" transform="rotate(75)"/><use href="#flag-in-spoke" transform="rotate(90)"/>
+        <use href="#flag-in-spoke" transform="rotate(105)"/><use href="#flag-in-spoke" transform="rotate(120)"/><use href="#flag-in-spoke" transform="rotate(135)"/>
+        <use href="#flag-in-spoke" transform="rotate(150)"/><use href="#flag-in-spoke" transform="rotate(165)"/><use href="#flag-in-spoke" transform="rotate(180)"/>
+        <use href="#flag-in-spoke" transform="rotate(195)"/><use href="#flag-in-spoke" transform="rotate(210)"/><use href="#flag-in-spoke" transform="rotate(225)"/>
+        <use href="#flag-in-spoke" transform="rotate(240)"/><use href="#flag-in-spoke" transform="rotate(255)"/><use href="#flag-in-spoke" transform="rotate(270)"/>
+        <use href="#flag-in-spoke" transform="rotate(285)"/><use href="#flag-in-spoke" transform="rotate(300)"/><use href="#flag-in-spoke" transform="rotate(315)"/>
+        <use href="#flag-in-spoke" transform="rotate(330)"/><use href="#flag-in-spoke" transform="rotate(345)"/>
+      </g>
+    </symbol>
+  </svg>
   <div class="tricolor" aria-hidden="true"></div>
   <div class="aurora" aria-hidden="true"><span></span><span></span><span></span></div>
   <a class="skip" href="#main">Skip to content</a>
@@ -84,7 +105,7 @@
     </div>
     <div class="container copyright">
       <span>© <span id="year"></span> ConvertHub. All rights reserved.</span>
-      <span class="made-in">Made with ❤️ in India <i class="flag" aria-hidden="true"></i></span>
+      <span class="made-in">Made with ❤️ in India <svg class="flag" role="img" aria-label="Flag of India"><use href="#flag-in"/></svg></span>
     </div>
   </footer>
 

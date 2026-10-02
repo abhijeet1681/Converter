@@ -13,24 +13,34 @@ import crypto from 'node:crypto';
 import { execFile } from 'node:child_process';
 import { promisify } from 'node:util';
 import { fileURLToPath, pathToFileURL } from 'node:url';
+import { createRequire } from 'node:module';
+// The tool catalog is shared between browser and server (single source of truth).
+// Static import (not a dynamic path) so serverless bundlers (Vercel/nft) trace and include it.
+import { TOOLS, CATEGORIES, SITE_NAME } from './public/js/tools.js';
 
 const execFileP = promisify(execFile);
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 const PUBLIC_DIR = path.join(__dirname, 'public');
-const pkg = JSON.parse(fs.readFileSync(path.join(__dirname, 'package.json'), 'utf8'));
+const pkg = createRequire(import.meta.url)('./package.json');
 
 loadEnvFile(path.join(__dirname, '.env'));
 
-// Serverless (Vercel): there is no MySQL, Ollama, Whisper, LibreOffice or persistent disk next to the function.
-// Default those features OFF so a cold start is instant; the 115+ in-browser tools work exactly the same.
-// Set the variables in the Vercel dashboard to point at real external services if you have them.
+// Serverless (Vercel / Lambda / Netlify): there is no persistent disk, no LibreOffice, no rclone, and
+// "127.0.0.1" means the function itself — never the owner's laptop. So, regardless of what environment
+// variables were pasted into the dashboard:
+//   • file archive + Office conversion are always OFF (physically impossible there)
+//   • MySQL / Ollama / Whisper pointing at localhost are treated as OFF (avoids 5 s connect timeouts per cold start)
+//   • a real cloud MySQL (DB_HOST=db.example.com) or remote Ollama URL still works
+// The 115+ in-browser tools work exactly the same; the UI shows friendly "not available" notices for the rest.
 const SERVERLESS = Boolean(process.env.VERCEL || process.env.AWS_LAMBDA_FUNCTION_NAME || process.env.NETLIFY);
 if (SERVERLESS) {
-  process.env.DB_ENABLED ??= 'false';
-  process.env.ARCHIVE_FILES ??= 'false';
-  process.env.ENABLE_OFFICE_CONVERSION ??= 'false';
-  process.env.OLLAMA_URL ??= '';
-  process.env.WHISPER_URL ??= '';
+  const isLocal = v => !v || /^(https?:\/\/)?(127\.0\.0\.1|localhost|::1|0\.0\.0\.0)(:\d+)?\/?$/i.test(String(v).trim());
+  process.env.ARCHIVE_FILES = 'false';
+  process.env.ENABLE_OFFICE_CONVERSION = 'false';
+  if (isLocal(process.env.DB_HOST)) process.env.DB_ENABLED = 'false';
+  if (isLocal(process.env.OLLAMA_URL)) process.env.OLLAMA_URL = '';
+  if (isLocal(process.env.WHISPER_URL)) process.env.WHISPER_URL = '';
+  process.env.TRUST_PROXY = 'true'; // always behind the platform's proxy
 }
 
 // DB + AI modules read process.env, so import them only after .env is loaded
@@ -52,8 +62,6 @@ const config = {
   aiRateLimitPerHour: Number(process.env.AI_RATE_LIMIT_PER_HOUR) || 40,
 };
 
-// The tool catalog is shared between browser and server (single source of truth)
-const { TOOLS, CATEGORIES, SITE_NAME } = await import(pathToFileURL(path.join(PUBLIC_DIR, 'js', 'tools.js')).href);
 const TOOL_MAP = new Map(TOOLS.map(t => [t.id, t]));
 const CAT_MAP = new Map(CATEGORIES.map(c => [c.id, c]));
 
@@ -71,7 +79,8 @@ const soffice = config.enableOffice ? await findSoffice() : null;
 let activeJobs = 0;
 const dbReady = await db.initDb();
 const aiStatus = await ai.aiHealth(true);
-const archiveOn = await archive.initArchive();
+// Never let the archive take the whole site down (e.g. unwritable ARCHIVE_DIR) — degrade to "archive off"
+const archiveOn = await archive.initArchive().catch(e => { console.warn(`  ➜ Archive: DISABLED — ${e.message}`); return false; });
 if (archiveOn) {
   archive.setDriveCallback((fileId, info) => db.setDriveInfo(fileId, info));
   if (dbReady) archive.resumePending(await db.pendingDriveUploads()); // finish uploads interrupted by a restart / Drive being offline
@@ -116,7 +125,8 @@ app.use((req, res, next) => {
 });
 
 // ---------- HTML pages with per-page SEO ----------
-const template = fs.readFileSync(path.join(PUBLIC_DIR, 'index.html'), 'utf8');
+// The HTML shell lives in src/ (not public/) because it is a TEMPLATE with __TITLE__ placeholders, never served raw.
+const template = fs.readFileSync(path.join(__dirname, 'src', 'template.html'), 'utf8');
 const esc = s => String(s).replace(/[&<>"]/g, c => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;' }[c]));
 const baseUrl = req => config.siteUrl || `${req.protocol}://${req.get('host')}`;
 
@@ -396,7 +406,7 @@ app.use((err, req, res, next) => {
 });
 
 // ---------- Start ----------
-checkVendor();
+if (!SERVERLESS) checkVendor(); // in a serverless bundle the vendor files live on the CDN, not next to the function
 sweepTemp();
 setInterval(sweepTemp, 60 * 60 * 1000).unref();
 if (archiveOn) { archive.sweep(db.clearExpiredArchive); setInterval(() => archive.sweep(db.clearExpiredArchive), 24 * 60 * 60 * 1000).unref(); }

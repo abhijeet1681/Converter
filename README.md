@@ -256,7 +256,7 @@ public/js/engines/pdf.js  ← + pdfToWord
 public/js/tools.js        ← + AI category and 7 AI tools, PDF to Word
 public/js/app.js          ← redesigned UI, smart drop, palette, favourites, history, admin dashboard, confetti, feedback
 public/css/style.css      ← complete new design system (dark-first, aurora, glass, animations)
-public/index.html         ← dark default, tricolor line, aurora, new nav (✨ AI, History)
+src/template.html         ← HTML shell (moved out of public/ so hosts never serve the raw template), dark default, tricolor line, aurora
 public/js/theme.js        ← dark is the default
 ```
 

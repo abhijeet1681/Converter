@@ -19,6 +19,18 @@ export function h(tag, attrs, ...children) {
   return el;
 }
 
+/** <svg><use href="#id"/></svg> from the sprite in index.html (h() can't build SVG — it needs the SVG namespace). */
+export function svgUse(id, cls, label) {
+  const NS = 'http://www.w3.org/2000/svg';
+  const svg = document.createElementNS(NS, 'svg');
+  svg.setAttribute('class', cls);
+  if (label) { svg.setAttribute('role', 'img'); svg.setAttribute('aria-label', label); } else svg.setAttribute('aria-hidden', 'true');
+  const use = document.createElementNS(NS, 'use');
+  use.setAttribute('href', `#${id}`);
+  svg.append(use);
+  return svg;
+}
+
 const scripts = new Map();
 /** Lazy-load a classic script once (libraries are only downloaded when a tool needs them). */
 export function loadScript(src) {

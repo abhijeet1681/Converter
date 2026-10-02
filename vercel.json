@@ -1,20 +1,17 @@
 {
   "$schema": "https://openapi.vercel.sh/vercel.json",
-  "builds": [
-    {
-      "src": "api/index.js",
-      "use": "@vercel/node",
-      "config": { "includeFiles": ["server.js", "src/**", "public/index.html", "public/js/tools.js", "package.json"] }
-    },
-    { "src": "public/**", "use": "@vercel/static" }
+  "framework": null,
+  "installCommand": "npm install",
+  "buildCommand": "npm run vendor",
+  "outputDirectory": "public",
+  "functions": {
+    "api/index.js": { "includeFiles": "{src/template.html,package.json}", "maxDuration": 60 }
+  },
+  "rewrites": [
+    { "source": "/(.*)", "destination": "/api" }
   ],
-  "routes": [
-    {
-      "src": "/(css|js|vendor)/(.*)",
-      "dest": "/public/$1/$2",
-      "headers": { "Cache-Control": "public, max-age=2592000, immutable", "Cross-Origin-Resource-Policy": "same-origin" }
-    },
-    { "src": "/(favicon[.]svg|manifest[.]webmanifest)", "dest": "/public/$1", "headers": { "Cache-Control": "public, max-age=86400" } },
-    { "src": "/(.*)", "dest": "/api/index.js" }
+  "headers": [
+    { "source": "/vendor/(.*)", "headers": [{ "key": "Cache-Control", "value": "public, max-age=2592000, immutable" }] },
+    { "source": "/(css|js)/(.*)", "headers": [{ "key": "Cache-Control", "value": "public, max-age=300" }] }
   ]
 }

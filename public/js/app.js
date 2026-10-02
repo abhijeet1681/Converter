@@ -1,6 +1,6 @@
 // ConvertHub single-page app: routing, pages, upload queue, options, results, AI finder, palette, tracking
 import { CATEGORIES, TOOLS, TOOL_MAP, SITE_NAME } from './tools.js';
-import { h, $, formatBytes, extOf, toast, downloadBlob } from './utils.js';
+import { h, $, svgUse, formatBytes, extOf, toast, downloadBlob } from './utils.js';
 import { track, fileMeta, historyAdd, historyList, historyClear, sid } from './track.js';
 
 const CAT = new Map(CATEGORIES.map(c => [c.id, c]));
@@ -261,6 +261,7 @@ function homeView() {
   const aiBtn = h('button', { class: 'ai-ask', type: 'button', onclick: () => openPalette(search.value, true) }, '✨ Ask AI');
   const grid = h('div', { class: 'tool-grid stagger' });
   const tabs = h('div', { class: 'tabs', role: 'tablist' });
+  const trendRow = h('div', { class: 'trend', hidden: true });
   let active = favs.size ? 'favs' : 'popular';
   const draw = () => {
     const q = search.value.trim();
@@ -288,8 +289,25 @@ function homeView() {
     countUp(stats.querySelector('[data-k="conv"] b'), s.conversions);
     stats.querySelector('[data-k="mb"] b').textContent = s.bytes > 1e9 ? `${(s.bytes / 1e9).toFixed(1)} GB` : `${Math.round(s.bytes / 1e6)} MB`;
     (s.trending || []).forEach(id => trending.add(id));
-    if (trending.size) draw();
+    if (trending.size) {
+      draw();
+      const hot = [...trending].map(id => TOOL_MAP.get(id)).filter(Boolean).slice(0, 8);
+      if (hot.length) { trendRow.hidden = false; trendRow.replaceChildren(h('span', { class: 'tl' }, '🔥 Trending now'), ...hot.map(t => h('a', { href: `/tools/${t.id}`, 'data-link': '' }, `${CAT.get(t.cat).icon} ${t.title}`))); }
+    }
   }).catch(() => {});
+
+  // quick convert — the conversions people search for most, as FROM → TO tiles
+  const QUICK = [['jpg-to-png', 'JPG', 'PNG'], ['png-to-jpg', 'PNG', 'JPG'], ['heic-to-jpg', 'HEIC', 'JPG'], ['pdf-to-jpg', 'PDF', 'JPG'], ['jpg-to-pdf', 'JPG', 'PDF'],
+    ['pdf-to-word', 'PDF', 'DOCX'], ['word-to-pdf', 'DOCX', 'PDF'], ['excel-to-csv', 'XLSX', 'CSV'], ['csv-to-excel', 'CSV', 'XLSX'], ['video-to-mp3', 'MP4', 'MP3'],
+    ['mp4-to-gif', 'MP4', 'GIF'], ['mov-to-mp4', 'MOV', 'MP4'], ['compress-pdf', '🗜️'], ['merge-pdf', '🧩'], ['compress-image', '📉'], ['ai-translate', '🌐']];
+  const quickGrid = h('div', { class: 'quick-grid stagger' }, ...QUICK.map(([id, from, to]) => {
+    const t = TOOL_MAP.get(id); if (!t) return null;
+    const c = CAT.get(t.cat);
+    return h('a', { class: 'quick tilt', 'data-cat': t.cat, href: `/tools/${t.id}`, 'data-link': '', title: t.desc },
+      to ? h('span', { class: 'pair' }, h('span', { class: 'ext' }, from), h('span', { class: 'arrow' }, '→'), h('span', { class: 'ext to' }, to)) : h('span', { class: 'verb' }, from),
+      h('span', { class: 'ql' }, to ? `${from} to ${to}` : t.title),
+      h('small', null, `${c.icon} ${c.name}`));
+  }));
 
   // smart drop — drop any file, we suggest the right tools
   const sdInput = h('input', { type: 'file', hidden: true });
@@ -332,24 +350,43 @@ function homeView() {
   const formats = ['JPG', 'PNG', 'WEBP', 'HEIC', 'SVG', 'AVIF', 'GIF', 'PDF', 'DOCX', 'PPTX', 'XLSX', 'CSV', 'JSON', 'MP3', 'WAV', 'M4A', 'FLAC', 'MP4', 'MKV', 'MOV', 'WEBM', 'ZIP', 'SRT', 'TXT', 'MD', 'HTML', 'ODT', 'TIFF', 'ICO', 'BMP'];
   const marquee = h('div', { class: 'marquee', 'aria-hidden': 'true' }, h('div', { class: 'marquee-track' }, ...[...formats, ...formats].map(f => h('span', { class: 'fmt' }, f))));
 
+  const toolsSection = section(null, null, trendRow, tabs, grid);
+  toolsSection.classList.add('tools-home');
+  const showAll = () => { active = 'all'; search.value = ''; draw(); toolsSection.scrollIntoView({ behavior: 'smooth', block: 'start' }); };
+
   main.append(
     h('section', { class: 'hero' }, floaters, h('div', { class: 'container' },
-      h('span', { class: 'hero-badge' }, h('span', { class: 'dot' }), '100% private · Files never leave your device · Made in India'),
-      h('h1', null, 'Convert ', rot, h('br'), 'in seconds.'),
+      h('span', { class: 'hero-badge' }, h('span', { class: 'dot' }), '100% private · Files never leave your device · Made in India ', svgUse('flag-in', 'flag', 'Flag of India')),
+      h('h1', null, 'Convert ', rot, h('br'), h('span', { class: 'ul' }, 'in seconds.')),
       h('p', { class: 'lead' }, `${TOOLS.length}+ free tools for images, PDFs, documents, spreadsheets, audio and video — plus private AI that summarises, translates into Indian languages and converts speech to text.`),
       h('div', { class: 'hero-search-wrap' }, search, aiBtn),
       h('div', { class: 'hero-chips' }, ...[['heic-to-jpg', 'HEIC → JPG'], ['compress-pdf', 'Compress PDF'], ['merge-pdf', 'Merge PDF'], ['video-to-mp3', 'Video → MP3'], ['ai-translate', '✨ Translate to Hindi'], ['ai-transcribe', '✨ Audio → Text']]
         .map(([id, l]) => h('button', { class: 'chip', type: 'button', onclick: () => navigate(`/tools/${id}`) }, l))),
-      stats, ticker, smart, marquee)),
-    section(null, null, tabs, grid),
-    sectionEyebrow('Browse', 'Tools by category', null, h('div', { class: 'cat-grid stagger' }, ...CATEGORIES.map(c => h('a', { class: 'cat-card tilt', 'data-cat': c.id, href: `/category/${c.id}`, 'data-link': '' },
-      h('div', { class: 'ci' }, c.icon), h('h3', null, c.name), h('p', null, c.desc), h('span', { class: 'count' }, `${TOOLS.filter(t => t.cat === c.id).length} tools →`))))),
+      smart, stats, ticker, marquee)),
+    sectionEyebrow('Quick convert', 'Most popular conversions', 'One click, no sign-up, no watermark. Pick a pair and drop your file.', quickGrid),
+    toolsSection,
+    sectionEyebrow('Browse', 'Tools by category', null, h('div', { class: 'cat-grid stagger' }, ...CATEGORIES.map(c => {
+      const inCat = TOOLS.filter(t => t.cat === c.id);
+      const best = inCat.filter(t => t.popular).slice(0, 3);
+      return h('a', { class: 'cat-card tilt', 'data-cat': c.id, href: `/category/${c.id}`, 'data-link': '' },
+        h('div', { class: 'ci' }, c.icon), h('h3', null, c.name), h('p', null, c.desc),
+        best.length ? h('div', { class: 'mini' }, ...best.map(t => h('span', null, t.title))) : null,
+        h('span', { class: 'count' }, `${inCat.length} tools →`));
+    }))),
     sectionEyebrow('Simple', 'How it works', null, h('div', { class: 'steps stagger' },
       h('div', null, h('h3', null, 'Choose a tool'), h('p', null, 'Search, browse, drop a file on the magic box, or just describe what you want to the AI.')),
       h('div', null, h('h3', null, 'Add your files'), h('p', null, 'Drag & drop, click to browse or paste. Tweak the options if you like.')),
       h('div', null, h('h3', null, 'Download'), h('p', null, 'Conversion happens instantly on your device. Download files one by one or as a ZIP.')))),
     featuresSection(),
     faqSection(),
+    section(null, null, h('div', { class: 'cta-banner' },
+      h('span', { class: 'eyebrow' }, 'Ready when you are'),
+      h('h2', null, 'Your files, converted in seconds — ', h('span', { class: 'grad' }, 'free forever'), '.'),
+      h('p', null, 'No sign-up, no watermark, and for most tools no upload at all. Drop a file and see for yourself.'),
+      h('div', { class: 'cta-actions' },
+        h('button', { class: 'btn primary big', type: 'button', onclick: showAll }, `Browse all ${TOOLS.length} tools`),
+        h('button', { class: 'btn saffron big', type: 'button', onclick: () => openPalette('', true) }, '✨ Ask the AI')),
+      h('div', { class: 'trust' }, h('span', null, '🔒 Private by design'), h('span', null, '⚡ Instant, in your browser'), h('span', null, '₹0 · No ads'), h('span', null, 'Made in India ', svgUse('flag-in', 'flag'))))),
   );
   draw();
 }

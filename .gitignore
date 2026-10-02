@@ -6,3 +6,7 @@ public/vendor/
 Thumbs.db
 archive/
 .vercel/
+
+.vercel
+.env*
+.serena/
